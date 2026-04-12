@@ -281,4 +281,3 @@ st.metric("Avg Edge", round(res["Edge"].mean(),4))
 st.metric("Trades", len(res))
 
 st.success("SYSTEM: STABLE + FALLBACK ENABLED + NO SPORT KEY FAIL")
-st.write(st.secrets)
