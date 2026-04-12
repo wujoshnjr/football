@@ -46,14 +46,19 @@ def fetch_all():
         try:
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{s}/odds",
-                params={"api_key": key, "regions": "eu", "markets": "h2h"},
+                params={
+                    "api_key": key,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal"
+                },
                 timeout=10
             )
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, list):
-                    for i in data:
-                        i["league"] = s
+                    for m in data:
+                        m["league"] = s
                     out.extend(data)
         except:
             continue
@@ -61,22 +66,55 @@ def fetch_all():
     return out
 
 # =========================
-# MODEL
+# SAFE MARKET
 # =========================
+def get_outcomes(bookmakers):
+    for b in bookmakers:
+        for m in b.get("markets", []):
+            if m.get("key") == "h2h":
+                o = m.get("outcomes", [])
+                if len(o) >= 3:
+                    return o
+    return None
+
+# =========================
+# LINEUP ENGINE (NEW)
+# =========================
+def lineup_factor():
+    """
+    模擬 lineup / formation / injury impact
+    """
+    base = 1.0
+
+    # key player missing simulation
+    if np.random.rand() < 0.15:
+        base -= np.random.uniform(0.05, 0.2)
+
+    # tactical boost
+    base += np.random.normal(0, 0.05)
+
+    return max(0.7, min(1.2, base))
+
 def strength():
     return max(0.2, 1.2 + np.random.normal(0, 0.3))
 
-def simulate(lh, la):
+# =========================
+# MONTE CARLO (ENHANCED)
+# =========================
+def simulate(lh, la, lineup_adj):
 
     home = draw = away = 0
-    score_map = Counter()
+    scores = Counter()
+
+    lh *= lineup_adj
+    la *= lineup_adj
 
     for _ in range(SIMS):
 
         hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.4)))
         ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.4)))
 
-        score_map[(hg, ag)] += 1
+        scores[(hg, ag)] += 1
 
         if hg > ag:
             home += 1
@@ -87,20 +125,15 @@ def simulate(lh, la):
 
     total = SIMS
 
-    top_scores = score_map.most_common(5)
+    top = scores.most_common(5)
 
     def fmt(s, c):
         return f"{s[0]}-{s[1]} ({round(c/total*100,1)}%)"
 
-    return (
-        home/total,
-        draw/total,
-        away/total,
-        [fmt(*x) for x in top_scores]
-    )
+    return home/total, draw/total, away/total, [fmt(*x) for x in top]
 
 # =========================
-# EV ENGINE
+# EV + KELLY
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
@@ -110,29 +143,37 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
-# 🧠 HEDGE FUND CORE
+# INTELLIGENCE SCORE (NEW)
 # =========================
-def market_prob(odds):
-    return 1 / odds
+def match_intel(lineup_adj, ev, minutes_to_kickoff):
 
-def consensus_prob(p_model, p_market):
-    return (0.7 * p_model) + (0.3 * p_market)
+    score = 50
+
+    # lineup stability
+    score += (lineup_adj - 1) * 100
+
+    # EV strength
+    score += ev * 50
+
+    # kickoff proximity
+    if minutes_to_kickoff < 90:
+        score += 10
+
+    return max(0, min(100, score))
 
 # =========================
 # RISK ENGINE
 # =========================
-def risk(ev, draw, odds_home, odds_away):
+def risk(ev, draw, oh, oa):
 
     score = 0
-
     if draw > 0.28:
         score += 25
-    if min(odds_home, odds_away) < 1.6:
+    if min(oh, oa) < 1.6:
         score += 25
     if ev < 0:
         score += 40
-
-    return min(score, 100)
+    return min(100, score)
 
 def label(score):
     if score > 70:
@@ -146,7 +187,7 @@ def label(score):
 # =========================
 # APP
 # =========================
-st.title("🏦 v10 HEDGE FUND FOOTBALL ENGINE")
+st.title("🏦 v12 HEDGE FUND + LINEUP INTELLIGENCE SYSTEM")
 
 data = fetch_all()
 
@@ -159,37 +200,33 @@ for m in data:
         away = m.get("away_team")
 
         k = to_taipei(m.get("commence_time"))
-
         if not k:
             continue
 
-        if not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
+        if k < now_taipei() - dt.timedelta(hours=2):
             continue
 
         books = m.get("bookmakers", [])
         if not books:
             continue
 
-        outs = books[0]["markets"][0]["outcomes"]
+        outs = get_outcomes(books)
+        if not outs:
+            continue
 
         oh, od, oa = float(outs[0]["price"]), float(outs[1]["price"]), float(outs[2]["price"])
 
         lh = strength()
         la = strength()
 
-        ph, pd_, pa, scores = simulate(lh, la)
+        lineup_adj = lineup_factor()
 
-        # =========================
-        # CONSENSUS (交易核心)
-        # =========================
-        p_home = consensus_prob(ph, market_prob(oh))
-        p_draw = consensus_prob(pd_, market_prob(od))
-        p_away = consensus_prob(pa, market_prob(oa))
+        ph, pd_, pa, scores = simulate(lh, la, lineup_adj)
 
         evs = {
-            "HOME": EV(p_home, oh),
-            "DRAW": EV(p_draw, od),
-            "AWAY": EV(p_away, oa)
+            "HOME": EV(ph, oh),
+            "DRAW": EV(pd_, od),
+            "AWAY": EV(pa, oa)
         }
 
         pick = max(evs, key=evs.get)
@@ -198,16 +235,19 @@ for m in data:
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
         stake = kelly(ev, odds)
 
-        risk = risk(ev, p_draw, oh, oa)
-        tag = label(risk)
+        minutes = (k - now_taipei()).total_seconds() / 60
+
+        intel = match_intel(lineup_adj, ev, minutes)
 
         cards.append({
             "time": k,
+            "minutes": minutes,
             "match": f"{home} vs {away}",
             "pick": pick,
             "ev": ev,
-            "risk": risk,
-            "tag": tag,
+            "risk": risk(ev, pd_, oh, oa),
+            "label": label(risk(ev, pd_, oh, oa)),
+            "intel": intel,
             "scores": scores
         })
 
@@ -215,9 +255,9 @@ for m in data:
         continue
 
 # =========================
-# SORT BY TIME (交易桌)
+# SORT (TRADING DESK)
 # =========================
-cards = sorted(cards, key=lambda x: x["time"])
+cards = sorted(cards, key=lambda x: x["minutes"])
 
 for c in cards:
 
@@ -225,9 +265,16 @@ for c in cards:
     st.subheader(c["match"])
 
     st.write(f"🕒 {c['time'].strftime('%Y-%m-%d %H:%M')}")
-    st.write(f"⚠️ {c['tag']} | Risk {c['risk']}")
-    st.write(f"💰 EV: {round(c['ev'],3)} | Pick: {c['pick']}")
+    st.write(f"⏳ 距離開賽：{int(c['minutes'])} 分鐘")
 
-    st.write("📊 Score distribution:")
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("Pick", c["pick"])
+    col2.metric("EV", round(c["ev"], 3))
+    col3.metric("INTEL", round(c["intel"], 1))
+
+    st.write(f"⚠️ 狀態：{c['label']}")
+
+    st.write("📊 Score forecast:")
     for s in c["scores"]:
         st.write("•", s)
