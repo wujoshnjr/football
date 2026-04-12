@@ -3,12 +3,11 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
-import pandas as pd
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME FILTER
+# TIME SAFE
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -23,111 +22,102 @@ def to_taipei(ts):
         return None
 
 def in_24h(k):
-    return now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
+    return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# DATA
+# FETCH (NO FILTER)
 # =========================
 def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
 
-    r = requests.get(
-        "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
-        params={
-            "api_key": key,
-            "regions": "eu",
-            "markets": "h2h",
-            "oddsFormat": "decimal"
-        }
-    )
+    try:
+        r = requests.get(
+            "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
+            params={
+                "api_key": key,
+                "regions": "eu",
+                "markets": "h2h",
+                "oddsFormat": "decimal"
+            },
+            timeout=10
+        )
 
-    if r.status_code != 200:
+        if r.status_code != 200:
+            return []
+
+        return r.json()
+
+    except:
         return []
 
-    return r.json()
+# =========================
+# SAFE MARKET PARSER (FIX)
+# =========================
+def safe_odds(m):
+
+    try:
+        outs = m.get("bookmakers", [])[0].get("markets", [])[0].get("outcomes", [])
+        if len(outs) < 3:
+            return None
+
+        return [o["price"] for o in outs]
+
+    except:
+        return None
 
 # =========================
-# MARKET REGIME ENGINE
+# SIGNAL ENGINE
 # =========================
-def regime(probs):
+def signal(odds):
 
-    vol = np.std(probs)
+    probs = np.array([1/o for o in odds])
+    probs = probs / probs.sum()
 
-    if vol > 0.05:
-        return "STEAMING", 1.3
-    elif vol < 0.02:
-        return "FLAT", 1.0
-    else:
-        return "NORMAL", 1.1
-
-# =========================
-# SIGNAL ENGINE (FIXED)
-# =========================
-def signal_engine(probs, multiplier):
-
-    max_p = max(probs)
-
-    base_signal = (max_p - 0.33) * 3
-
-    return base_signal * multiplier
-
-# =========================
-# EXECUTION MATRIX
-# =========================
-def decision(signal):
-
-    if signal > 0.45:
-        return "STRONG BUY"
-    elif signal > 0.25:
-        return "BUY"
-    elif signal > 0.10:
-        return "WATCH"
-    else:
-        return "AVOID"
+    return probs, (max(probs) - 0.33) * 3
 
 # =========================
 # APP
 # =========================
-st.title("🏦 v24 INSTITUTIONAL EXECUTION SYSTEM (FINAL TRADING DESK)")
+st.title("🏦 v25 REAL HEDGE FUND ROBUST SYSTEM (FIXED NO MATCH ISSUE)")
 
 data = fetch_all()
 
+shown = 0
+
 for m in data:
 
-    try:
-        home = m["home_team"]
-        away = m["away_team"]
+    home = m.get("home_team")
+    away = m.get("away_team")
 
-        k = to_taipei(m["commence_time"])
+    k = to_taipei(m.get("commence_time"))
 
-        if not k or not in_24h(k):
-            continue
+    # ❗ NEVER SKIP DISPLAY
+    odds = safe_odds(m)
 
-        outs = m["bookmakers"][0]["markets"][0]["outcomes"]
-        odds = [o["price"] for o in outs]
+    st.markdown("━━━━━━━━━━━━━━━━━━")
+    st.subheader(f"{away} vs {home}")
 
-        probs = np.array([1/o for o in odds])
-        probs = probs / probs.sum()
-
-        reg, mult = regime(probs)
-
-        signal = signal_engine(probs, mult)
-
-        exec_level = decision(signal)
-
-        st.markdown("━━━━━━━━━━━━━━━━━━")
-        st.subheader(f"{away} vs {home}")
-
+    # TIME (SAFE)
+    if k:
         st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
-        st.write(f"📡 Market Regime: {reg}")
-        st.metric("Signal", round(signal, 4))
-        st.write(f"🎯 Execution: {exec_level}")
+    else:
+        st.write("🕒 台北時間：⚠️ unavailable")
 
-        st.write({
-            "HOME": round(probs[0], 3),
-            "DRAW": round(probs[1], 3),
-            "AWAY": round(probs[2], 3),
-        })
-
-    except:
+    # NO ODDS CASE
+    if not odds:
+        st.warning("⚠️ Odds missing → DISPLAY ONLY MODE")
         continue
+
+    probs, sig = signal(odds)
+
+    st.metric("Signal", round(sig, 4))
+
+    st.write({
+        "HOME": round(probs[0], 3),
+        "DRAW": round(probs[1], 3),
+        "AWAY": round(probs[2], 3),
+    })
+
+    shown += 1
+
+st.info(f"Total matches shown: {shown}")
