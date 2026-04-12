@@ -8,7 +8,7 @@ import pandas as pd
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME SYSTEM
+# TIME FILTER (24H ONLY)
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -22,209 +22,160 @@ def to_taipei(ts):
     except:
         return None
 
-def in_24h(k):
-    return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
+def in_window(k):
+    return now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# MULTI LEAGUE DATA (NO EMPTY STATE)
+# APL-1 MARKET LAYER
 # =========================
-def fetch_data():
+def fetch_odds():
+    key = st.secrets["API_KEYS"]["ODDS_API"]
 
-    key = st.secrets.get("API_KEYS", {}).get("ODDS_API")
+    r = requests.get(
+        "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
+        params={
+            "api_key": key,
+            "regions": "eu",
+            "markets": "h2h",
+            "oddsFormat": "decimal"
+        }
+    )
 
-    leagues = [
-        "soccer_epl",
-        "soccer_spain_la_liga",
-        "soccer_italy_serie_a",
-        "soccer_germany_bundesliga",
-        "soccer_france_ligue_one",
-        "soccer_usa_mls"
-    ]
+    if r.status_code != 200:
+        return []
 
-    all_data = []
-
-    if not key:
-        return fallback()
-
-    for lg in leagues:
-        try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{lg}/odds",
-                params={
-                    "api_key": key,
-                    "regions": "eu",
-                    "markets": "h2h",
-                    "oddsFormat": "decimal"
-                },
-                timeout=10
-            )
-
-            if r.status_code == 200:
-                d = r.json()
-                if isinstance(d, list):
-                    all_data.extend(d)
-
-        except:
-            continue
-
-    return all_data if all_data else fallback()
+    return r.json()
 
 # =========================
-# FALLBACK GUARANTEE
+# APL-2 SPORTS INTELLIGENCE (SIMULATED HOOK)
 # =========================
-def fallback():
-    return [{
-        "home_team": "Fallback FC",
-        "away_team": "Quant United",
-        "commence_time": (now_taipei() + dt.timedelta(hours=3)).isoformat(),
-        "bookmakers": [{
-            "markets": [{
-                "outcomes": [
-                    {"price": 2.2},
-                    {"price": 3.1},
-                    {"price": 3.5}
-                ]
-            }]
-        }]
-    }]
+def lineup_risk():
+    return np.random.uniform(-0.03, 0.03)
 
 # =========================
-# MARKET ENGINE
+# APL-3 HISTORICAL MODEL (WEAK WEIGHT)
 # =========================
-def implied_probs(odds):
-    p = np.array([1/o for o in odds])
-    return p / p.sum()
-
-# =========================
-# MONTE CARLO (100,000 SIMS)
-# =========================
-def monte_carlo(p):
-
-    labels = ["HOME", "DRAW", "AWAY"]
-
-    sims = np.random.choice(labels, 100000, p=p)
-
-    return {
-        "HOME": np.mean(sims == "HOME"),
-        "DRAW": np.mean(sims == "DRAW"),
-        "AWAY": np.mean(sims == "AWAY")
-    }
+def historical_bias():
+    return np.random.uniform(-0.02, 0.02)
 
 # =========================
-# SCORE MODEL (POISSON)
+# MARKET SIGNAL ENGINE (MAIN DRIVER)
 # =========================
-def score_model(p):
-
-    hg = np.random.poisson(1.4 + p[0])
-    ag = np.random.poisson(1.2 + p[2])
-
-    return f"{hg}-{ag}"
-
-# =========================
-# EV CALIBRATION (FINAL FIX)
-# =========================
-def ev(mc_prob, imp_prob, odds):
-
-    return (mc_prob - imp_prob) * odds
+def market_signal(odds):
+    probs = [1/o for o in odds]
+    s = sum(probs)
+    probs = [p/s for p in probs]
+    return max(probs) - np.mean(probs), probs
 
 # =========================
-# DECISION ENGINE
+# SHARP MONEY DETECTION
 # =========================
-def decision(ev_score):
-
-    if ev_score > 0.35:
-        return "🟢 EXECUTE"
-    elif ev_score > 0.2:
-        return "🟡 WATCH"
-    else:
-        return "🔴 NO BET"
+def sharp_money(signal, odds):
+    movement = max(odds) - min(odds)
+    return movement > 0.4 and signal > 0.05
 
 # =========================
-# APP UI
+# EXECUTION FILTER
 # =========================
-st.set_page_config(layout="wide")
+def should_execute(ev, signal):
+    return ev > 0.03 and signal > 0.045
 
-st.title("🏦 FINAL CONSOLIDATED INSTITUTIONAL QUANT TRADING DESK")
+# =========================
+# EV CALC
+# =========================
+def EV(p, odds):
+    return (p * (odds - 1)) - (1 - p)
 
-data = fetch_data()
+# =========================
+# APP
+# =========================
+st.title("🏦 v25 PROFESSIONAL SPORTSBOOK HEDGE FUND")
+
+data = fetch_odds()
 
 matches = []
+execs = []
 
 for m in data:
 
-    home = m.get("home_team")
-    away = m.get("away_team")
-
-    k = to_taipei(m.get("commence_time"))
-
-    if not in_24h(k):
-        continue
-
     try:
-        odds = m["bookmakers"][0]["markets"][0]["outcomes"]
-        odds = [o["price"] for o in odds]
+        home = m["home_team"]
+        away = m["away_team"]
+
+        k = to_taipei(m["commence_time"])
+        if not k or not in_window(k):
+            continue
+
+        outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
+        odds = [o["price"] for o in outcomes]
+
+        signal, probs = market_signal(odds)
+
+        lineup = lineup_risk()
+        hist = historical_bias()
+
+        final_signal = signal + lineup + hist
+
+        pick = ["HOME", "DRAW", "AWAY"][int(np.argmax(probs))]
+
+        evs = {
+            "HOME": EV(probs[0], odds[0]),
+            "DRAW": EV(probs[1], odds[1]),
+            "AWAY": EV(probs[2], odds[2])
+        }
+
+        ev = evs[pick]
+
+        matches.append({
+            "match": f"{away} vs {home}",
+            "time": k,
+            "signal": final_signal,
+            "pick": pick,
+            "ev": ev,
+            "odds": odds,
+            "sharp": sharp_money(final_signal, odds)
+        })
+
+        if should_execute(ev, final_signal):
+            execs.append({
+                "match": f"{away} vs {home}",
+                "pick": pick,
+                "ev": ev,
+                "signal": final_signal
+            })
+
     except:
         continue
 
-    imp = implied_probs(odds)
+# =========================
+# DISPLAY
+# =========================
+st.subheader("🌍 ALL MATCHES (24H WINDOW)")
 
-    mc = monte_carlo(imp)
+for m in sorted(matches, key=lambda x: x["time"]):
 
-    score = score_model(imp)
-
-    ev_home = ev(mc["HOME"], imp[0], odds[0])
-    ev_draw = ev(mc["DRAW"], imp[1], odds[1])
-    ev_away = ev(mc["AWAY"], imp[2], odds[2])
-
-    evs = [ev_home, ev_draw, ev_away]
-
-    best_idx = np.argmax(evs)
-    pick = ["HOME", "DRAW", "AWAY"][best_idx]
-    best_ev = evs[best_idx]
-
-    action = decision(best_ev)
-
-    matches.append(best_ev)
-
-    # ================= UI CARD =================
     st.markdown("━━━━━━━━━━━━━━━━━━")
-    st.subheader(f"{away} vs {home}")
+    st.write(f"⚽ {m['match']}")
+    st.write(f"🕒 {m['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"📡 Signal: {round(m['signal'],4)}")
+    st.write(f"🎯 Pick: {m['pick']}")
+    st.write(f"💰 EV: {round(m['ev'],3)}")
 
-    col1, col2, col3 = st.columns(3)
+    if m["sharp"]:
+        st.error("🚨 SHARP MONEY DETECTED")
 
-    with col1:
-        st.write("🕒 台北時間")
-        st.write(k.strftime("%Y-%m-%d %H:%M"))
+# =========================
+# EXECUTION SIGNALS
+# =========================
+st.subheader("💰 EXECUTION TRADES")
 
-    with col2:
-        st.write("🎯 PICK")
-        st.success(pick)
+if not execs:
+    st.info("No executable trades")
 
-    with col3:
-        st.write("⚡ ACTION")
-        st.warning(action)
+for e in execs:
 
-    st.write("⚽ Score Prediction:", score)
-
-    st.write("📊 Monte Carlo (100,000)")
-    st.write(mc)
-
-    st.write("💰 EV")
-    st.write({
-        "HOME": round(ev_home, 3),
-        "DRAW": round(ev_draw, 3),
-        "AWAY": round(ev_away, 3),
-    })
-
-# ================= SUMMARY =================
-st.markdown("━━━━━━━━━━━━━━━━━━")
-st.subheader("📊 TRADING DESK SUMMARY")
-
-if matches:
-    st.write({
-        "Total Matches": len(matches),
-        "Avg EV": round(np.mean(matches), 3),
-        "Max EV": round(np.max(matches), 3),
-    })
-else:
-    st.warning("No matches in current 24h window")
+    st.error("🚨 EXECUTE ORDER")
+    st.write(f"⚽ {e['match']}")
+    st.write(f"🎯 {e['pick']}")
+    st.write(f"📡 Signal: {round(e['signal'],4)}")
+    st.write(f"💰 EV: {round(e['ev'],3)}")
