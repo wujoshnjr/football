@@ -1,109 +1,159 @@
 import streamlit as st
-import numpy as np
 import requests
 import pandas as pd
+import numpy as np
 import datetime as dt
 from zoneinfo import ZoneInfo
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-SPORTS = [
-    "soccer_epl","soccer_spain_la_liga","soccer_italy_serie_a",
-    "soccer_germany_bundesliga","soccer_france_ligue_one",
-    "soccer_netherlands_eredivisie","soccer_usa_mls",
-    "soccer_brazil_serie_a","soccer_japan_j_league"
+# =========================
+# GLOBAL LEAGUES
+# =========================
+LEAGUES = [
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "soccer_france_ligue_one",
+    "soccer_netherlands_eredivisie",
+    "soccer_portugal_primeira_liga",
+    "soccer_turkey_super_lig",
+    "soccer_usa_mls",
+    "soccer_brazil_serie_a",
+    "soccer_japan_j_league",
+    "soccer_korea_k_league"
 ]
 
+# =========================
+# TIME
+# =========================
 def now():
     return dt.datetime.now(TAIPEI)
 
-def convert(ts):
-    t = pd.to_datetime(ts)
-    if t.tzinfo is None:
-        t = t.tz_localize("UTC")
-    return t.tz_convert(TAIPEI)
+def to_taipei(ts):
+    try:
+        t = pd.to_datetime(ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return t.tz_convert(TAIPEI)
+    except:
+        return None
 
 def in_24h(t):
     n = now()
     return n <= t <= n + dt.timedelta(hours=24)
 
-def fetch():
+# =========================
+# FETCH ALL LEAGUES
+# =========================
+def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
-    all_data = []
+    all_matches = []
 
-    for s in SPORTS:
+    for lg in LEAGUES:
+
         try:
-            r = requests.get(
-                f"https://api.the-odds-api.com/v4/sports/{s}/odds",
-                params={"api_key":key,"regions":"eu","markets":"h2h","oddsFormat":"decimal"},
-                timeout=10
-            )
+            url = f"https://api.the-odds-api.com/v4/sports/{lg}/odds"
 
-            if r.status_code == 200:
-                for m in r.json():
-                    m["league"] = s
-                    all_data.append(m)
+            r = requests.get(url, params={
+                "api_key": key,
+                "regions": "eu,us,uk,au",
+                "markets": "h2h",
+                "oddsFormat": "decimal"
+            })
+
+            if r.status_code != 200:
+                st.warning(f"{lg} API failed")
+                continue
+
+            data = r.json()
+
+            if not data:
+                continue
+
+            for m in data:
+
+                if not m.get("bookmakers"):
+                    continue
+
+                kickoff = to_taipei(m.get("commence_time"))
+                if not kickoff:
+                    continue
+
+                if not in_24h(kickoff):
+                    continue
+
+                all_matches.append({
+                    "home": m["home_team"],
+                    "away": m["away_team"],
+                    "time": kickoff,
+                    "league": lg,
+                    "odds": m["bookmakers"][0]["markets"][0]["outcomes"]
+                })
 
         except:
             continue
 
-    return all_data
+    return all_matches
 
-def market(odds):
-    p = [1/x for x in odds]
+# =========================
+# MARKET MODEL
+# =========================
+def probs(odds):
+    p = [1/o["price"] for o in odds]
     s = sum(p)
-    p = [x/s for x in p]
-    return p
+    return [x/s for x in p]
 
-def ev(p, odds):
-    return (p * odds) - 1
+def pick_label(p):
+    return ["HOME","DRAW","AWAY"][int(np.argmax(p))]
 
-st.title("🏦 v28 INSTITUTIONAL SPORTSBOOK SYSTEM")
+def score_sim(pick):
+    if pick == "HOME":
+        return (2,1)
+    if pick == "AWAY":
+        return (1,2)
+    return (1,1)
 
-data = fetch()
+# =========================
+# APP
+# =========================
+st.title("🏦 GLOBAL FOOTBALL QUANT ENGINE (FINAL)")
+
+data = fetch_all()
+
+if not data:
+    st.error("❌ NO MATCHES → API LIMIT OR WRONG KEY OR EMPTY FEED")
 
 results = []
 
 for m in data:
 
     try:
-        home = m["home_team"]
-        away = m["away_team"]
-
-        t = convert(m["commence_time"])
-        if not in_24h(t):
-            continue
-
-        odds = [o["price"] for o in m["bookmakers"][0]["markets"][0]["outcomes"]]
-
-        probs = market(odds)
-
-        pred_score = {
-            "HOME": (2,1),
-            "DRAW": (1,1),
-            "AWAY": (1,2)
-        }
-
-        pick = ["HOME","DRAW","AWAY"][np.argmax(probs)]
+        p = probs(m["odds"])
+        pick = pick_label(p)
+        score = score_sim(pick)
 
         results.append({
-            "match": f"{away} vs {home}",
-            "time": t,
+            "match": f"{m['away']} vs {m['home']}",
+            "time": m["time"],
             "league": m["league"],
             "pick": pick,
-            "score": pred_score[pick],
-            "prob": probs
+            "score": score,
+            "prob": p
         })
 
     except:
         continue
 
-st.subheader("🌍 GLOBAL MATCHES (24H TAIPEI)")
-
+# =========================
+# DISPLAY (SORTED TIME)
+# =========================
 for r in sorted(results, key=lambda x: x["time"]):
 
-    st.write("━━━━━━━━━━━━━━")
-    st.write(r["match"])
-    st.write(r["time"].strftime("%Y-%m-%d %H:%M"))
-    st.write("Pick:", r["pick"])
-    st.write("Score:", r["score"])
+    st.markdown("━━━━━━━━━━━━━━━━━━")
+    st.write(f"⚽ {r['match']}")
+    st.write(f"🏆 {r['league']}")
+    st.write(f"🕒 {r['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"🎯 Pick: {r['pick']}")
+    st.write(f"⚽ Score: {r['score']}")
