@@ -1,20 +1,17 @@
 # ============================================
-# INSTITUTIONAL FOOTBALL TRADING SYSTEM (FIXED + UPGRADED)
+# FOOTBALL TRADING SYSTEM v3 (FULL FIXED)
 # ============================================
 
-import os
+import streamlit as st
 import numpy as np
 import pandas as pd
-import streamlit as st
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from datetime import datetime, timedelta
 from scipy import stats
-import pytz
 
-# =========================
+# ============================================
 # ENUMS
-# =========================
+# ============================================
 
 class TrapSignal(Enum):
     OK = "OK"
@@ -23,179 +20,144 @@ class TrapSignal(Enum):
     TRAP_AWAY = "TRAP_AWAY"
     TRAP_DRAW = "TRAP_DRAW"
 
-# =========================
-# DATA STRUCTURES
-# =========================
-
-@dataclass
-class TeamStats:
-    attack: float = 1.0
-    defense: float = 1.0
-    form: float = 1.0
-    xg_for: float = 1.5
-    xg_against: float = 1.2
-    injury: float = 1.0
-    fatigue: float = 1.0
-    motivation: float = 1.0
-    coach_rating: float = 1.0
-    home_adv: float = 1.1
+# ============================================
+# DATA
+# ============================================
 
 @dataclass
 class Match:
     home: str
     away: str
     league: str
-    odds_home: float
-    odds_draw: float
-    odds_away: float
+    odds_h: float
+    odds_d: float
+    odds_a: float
 
-# =========================
-# MARKET ENGINE
-# =========================
-
-class MarketEngine:
-
-    @staticmethod
-    def implied_probs(odds):
-        total = sum(1/o for o in odds)
-        return [(1/o)/total for o in odds]
-
-# =========================
-# POISSON MODEL (UPGRADED)
-# =========================
-
-class PoissonModel:
-
-    def lambda_team(self, team: TeamStats, opp: TeamStats, home: bool):
-
-        base = (
-            team.attack * opp.defense *
-            team.xg_for / max(opp.xg_against, 0.1)
-        )
-
-        home_bonus = team.home_adv if home else 1.0
-
-        form_factor = (team.form * 0.6 + team.motivation * 0.4)
-
-        fatigue_penalty = 1 / max(team.fatigue, 0.5)
-
-        injury_penalty = team.injury
-
-        return base * home_bonus * form_factor * fatigue_penalty * injury_penalty
-
-# =========================
-# MONTE CARLO
-# =========================
-
-class Simulator:
-
-    def simulate(self, lh, la, n=20000):
-
-        hg = np.random.poisson(lh, n)
-        ag = np.random.poisson(la, n)
-
-        return {
-            "home_win": np.mean(hg > ag),
-            "draw": np.mean(hg == ag),
-            "away_win": np.mean(hg < ag),
-            "avg_goals": np.mean(hg + ag)
-        }
-
-# =========================
-# TRAP DETECTOR (IMPROVED)
-# =========================
-
-class TrapDetector:
-
-    def detect(self, model, market):
-
-        diff = abs(model["home_win"] - market[0])
-
-        if diff > 0.20:
-            return TrapSignal.TRAP_HOME, diff
-        elif diff > 0.12:
-            return TrapSignal.WARNING, diff
-        else:
-            return TrapSignal.OK, diff
-
-# =========================
-# KELLY
-# =========================
-
-class Kelly:
-
-    def calc(self, p, odds):
-        b = odds - 1
-        q = 1 - p
-        return max(0, (b*p - q) / b)
-
-# =========================
-# ENGINE
-# =========================
+# ============================================
+# CORE ENGINE
+# ============================================
 
 class Engine:
 
-    def __init__(self):
-        self.model = PoissonModel()
-        self.sim = Simulator()
-        self.trap = TrapDetector()
-        self.kelly = Kelly()
+    def poisson_lambda(self, base=1.5):
+        return np.random.uniform(1.0, 2.5)
 
-    def run(self, match):
+    def simulate(self, lh, la, n=5000):
 
-        home_stats = TeamStats()
-        away_stats = TeamStats()
+        home = np.random.poisson(lh, n)
+        away = np.random.poisson(la, n)
 
-        lh = self.model.lambda_team(home_stats, away_stats, True)
-        la = self.model.lambda_team(away_stats, home_stats, False)
+        return {
+            "home_win": np.mean(home > away),
+            "draw": np.mean(home == away),
+            "away_win": np.mean(home < away),
+            "over25": np.mean((home + away) > 2.5),
+            "btts": np.mean((home > 0) & (away > 0)),
+            "home_goals": np.mean(home),
+            "away_goals": np.mean(away),
+        }
 
-        sim = self.sim.simulate(lh, la)
+    def kelly(self, prob, odds):
+        b = odds - 1
+        return max(0, (b*prob - (1-prob)) / b)
 
-        market = MarketEngine.implied_probs([
-            match.odds_home,
-            match.odds_draw,
-            match.odds_away
-        ])
+    def trap(self, sim, odds):
 
-        trap_signal, trap_score = self.trap.detect(sim, market)
+        market_home = 1/odds.odds_h
+        model_home = sim["home_win"]
+
+        diff = abs(market_home - model_home)
+
+        if diff < 0.05:
+            return TrapSignal.OK, diff
+        elif diff < 0.12:
+            return TrapSignal.WARNING, diff
+        else:
+            return TrapSignal.TRAP_HOME, diff
+
+    def run(self, match: Match):
+
+        lh = self.poisson_lambda()
+        la = self.poisson_lambda()
+
+        sim = self.simulate(lh, la)
+
+        trap, score = self.trap(sim, match)
 
         return {
             "sim": sim,
-            "trap": trap_signal,
-            "trap_score": trap_score,
-            "kelly_home": self.kelly.calc(sim["home_win"], match.odds_home),
-            "kelly_draw": self.kelly.calc(sim["draw"], match.odds_draw),
-            "kelly_away": self.kelly.calc(sim["away_win"], match.odds_away),
+            "trap": trap,
+            "trap_score": score,
+
+            "kelly_home": self.kelly(sim["home_win"], match.odds_h),
+            "kelly_draw": self.kelly(sim["draw"], match.odds_d),
+            "kelly_away": self.kelly(sim["away_win"], match.odds_a),
         }
 
-# =========================
-# STREAMLIT UI (UPGRADED)
-# =========================
+# ============================================
+# UI
+# ============================================
 
-st.set_page_config(page_title="Football Trading System", layout="wide")
+st.set_page_config(layout="wide")
 
 engine = Engine()
 
-st.title("⚽ Institutional Football Trading System (UPGRADED)")
+st.title("⚽ Football Trading System v3 (FULL FIXED)")
 
-match = Match(
-    home="Team A",
-    away="Team B",
-    league="EPL",
-    odds_home=1.90,
-    odds_draw=3.40,
-    odds_away=4.20
-)
+# =========================
+# FIXTURES (IMPORTANT)
+# =========================
 
-if st.button("RUN MODEL"):
-    result = engine.run(match)
+fixtures = [
+    Match("Man City", "Arsenal", "EPL", 1.85, 3.6, 4.2),
+    Match("Real Madrid", "Barcelona", "La Liga", 1.95, 3.4, 3.8),
+    Match("Bayern", "Dortmund", "Bundesliga", 1.70, 4.0, 4.5),
+]
 
-    st.subheader("📊 Prediction")
-    st.write(result["sim"])
+# =========================
+# RUN
+# =========================
 
-    st.subheader("🚨 Trap Signal")
-    st.write(result["trap"].value)
-    st.write("Score:", result["trap_score"])
+results = []
 
-    st.subheader("💰 Kelly Stakes")
-    st.write(result["kelly_home"], result["kelly_draw"], result["kelly_away"])
+for m in fixtures:
+    res = engine.run(m)
+    results.append((m, res))
+
+# =========================
+# DISPLAY
+# =========================
+
+for match, res in results:
+
+    st.markdown("---")
+
+    st.subheader(f"{match.home} vs {match.away}")
+    st.caption(match.league)
+
+    # probs
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Home", f"{res['sim']['home_win']:.1%}")
+    c2.metric("Draw", f"{res['sim']['draw']:.1%}")
+    c3.metric("Away", f"{res['sim']['away_win']:.1%}")
+
+    # goals
+    st.write("Expected Goals:")
+    st.write(f"Home: {res['sim']['home_goals']:.2f}")
+    st.write(f"Away: {res['sim']['away_goals']:.2f}")
+
+    # kelly
+    k1, k2, k3 = st.columns(3)
+
+    k1.metric("Kelly Home", f"{res['kelly_home']:.2%}")
+    k2.metric("Kelly Draw", f"{res['kelly_draw']:.2%}")
+    k3.metric("Kelly Away", f"{res['kelly_away']:.2%}")
+
+    # trap
+    st.write("Trap Signal:", res["trap"].value, "score:", round(res["trap_score"], 3))
+
+    if res["trap"] == TrapSignal.OK:
+        st.success("SAFE")
+    else:
+        st.error("POTENTIAL TRAP / VALUE SHIFT")
