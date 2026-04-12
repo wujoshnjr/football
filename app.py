@@ -8,17 +8,17 @@ import pytz
 from scipy.stats import poisson
 
 # =========================
-# TIME SYSTEM (LOCKED)
+# TIME SYSTEM (TAIPEI FIXED)
 # =========================
 
-TZ = pytz.timezone("Asia/Taipei")
+TPE = pytz.timezone("Asia/Taipei")
 
-def fmt(dt):
+def fmt_tpe(dt):
     if dt is None:
         return "TBD"
     if dt.tzinfo is None:
-        dt = TZ.localize(dt)
-    return dt.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
+        dt = TPE.localize(dt)
+    return dt.astimezone(TPE).strftime("%Y-%m-%d %H:%M")
 
 # =========================
 # ENUMS
@@ -30,7 +30,7 @@ class Signal(Enum):
     TRAP = "TRAP"
 
 # =========================
-# MATCH STRUCTURE
+# DATA STRUCTURE
 # =========================
 
 @dataclass
@@ -44,20 +44,61 @@ class Match:
     kickoff: datetime
 
 # =========================
-# HEDGE FUND ENGINE v5
+# BET RECOMMENDATION ENGINE
+# =========================
+
+class BetEngine:
+
+    def kelly(self, p, odds):
+        b = odds - 1
+        if b <= 0:
+            return 0
+        return max(0, (b*p - (1-p)) / b)
+
+    def recommend(self, match, sim, engine):
+
+        bets = [
+            ("home", sim["home"], match.odds_h),
+            ("draw", sim["draw"], match.odds_d),
+            ("away", sim["away"], match.odds_a),
+        ]
+
+        scored = []
+
+        for side, p, odds in bets:
+
+            ev = p * odds - 1
+            kelly = self.kelly(p, odds)
+
+            score = ev * 0.7 + kelly * 0.3
+
+            scored.append({
+                "side": side,
+                "prob": p,
+                "odds": odds,
+                "ev": ev,
+                "kelly": kelly,
+                "score": score
+            })
+
+        best = max(scored, key=lambda x: x["score"])
+
+        return {"best": best, "all": scored}
+
+# =========================
+# ENGINE (FULL HEDGE FUND)
 # =========================
 
 class Engine:
 
-    # -------------------------
-    # POISSON (xG engine)
-    # -------------------------
+    def __init__(self):
+        self.reco = BetEngine()
+
+    # xG
     def xg(self):
         return np.random.uniform(1.1, 2.6)
 
-    # -------------------------
-    # MONTE CARLO (FIXED 100K)
-    # -------------------------
+    # MONTE CARLO (100K FIXED)
     def simulate(self, lh, la, n=100000):
 
         home = np.random.poisson(lh, n)
@@ -66,30 +107,23 @@ class Engine:
         total = home + away
 
         return {
-            # 1X2
             "home": np.mean(home > away),
             "draw": np.mean(home == away),
             "away": np.mean(home < away),
 
-            # GOALS
             "hg": np.mean(home),
             "ag": np.mean(away),
 
-            # O/U
             "over15": np.mean(total > 1.5),
             "over25": np.mean(total > 2.5),
             "over35": np.mean(total > 3.5),
 
-            # BTTS
             "btts": np.mean((home > 0) & (away > 0)),
 
-            # STD (risk)
             "std": np.std(total)
         }
 
-    # -------------------------
-    # FULL SCORE DISTRIBUTION (你一直在問的）
-    # -------------------------
+    # SCORE PREDICTION (FIXED)
     def score_matrix(self, lh, la, max_goals=6):
 
         matrix = {}
@@ -100,18 +134,7 @@ class Engine:
 
         return dict(sorted(matrix.items(), key=lambda x: x[1], reverse=True))
 
-    # -------------------------
-    # KELLY
-    # -------------------------
-    def kelly(self, p, odds):
-        b = odds - 1
-        if b <= 0:
-            return 0
-        return max(0, (b * p - (1 - p)) / b)
-
-    # -------------------------
-    # TRAP SYSTEM
-    # -------------------------
+    # TRAP DETECTION
     def trap(self, sim, match):
 
         market = 1 / match.odds_h
@@ -123,9 +146,7 @@ class Engine:
             return Signal.WARNING, diff
         return Signal.SAFE, diff
 
-    # -------------------------
     # MAIN RUN
-    # -------------------------
     def run(self, m):
 
         lh = self.xg()
@@ -135,31 +156,27 @@ class Engine:
 
         signal, score = self.trap(sim, m)
 
+        reco = self.reco.recommend(m, sim, self)
+
         return {
             "sim": sim,
             "signal": signal,
             "trap_score": score,
-
-            # Kelly
-            "k_h": self.kelly(sim["home"], m.odds_h),
-            "k_d": self.kelly(sim["draw"], m.odds_d),
-            "k_a": self.kelly(sim["away"], m.odds_a),
-
-            # SCORE MODEL（補回來）
-            "scores": self.score_matrix(lh, la)
+            "scores": self.score_matrix(lh, la),
+            "recommendation": reco
         }
 
 # =========================
-# STREAMLIT UI v5
+# STREAMLIT UI
 # =========================
 
 st.set_page_config(layout="wide")
-st.title("🏦 FOOTBALL HEDGE FUND v5 (FULL SYSTEM)")
+st.title("🏦 FOOTBALL HEDGE FUND v5.1 (FULL FIXED)")
 
 engine = Engine()
 
 # =========================
-# FIXTURES
+# FIXTURES (MUST HAVE)
 # =========================
 
 matches = [
@@ -171,7 +188,7 @@ matches = [
 results = [(m, engine.run(m)) for m in matches]
 
 # =========================
-# TABLE VIEW (FIXED MATCH LIST)
+# TABLE VIEW
 # =========================
 
 st.subheader("📅 Match List")
@@ -180,7 +197,7 @@ df = pd.DataFrame([
     {
         "Match": f"{m.home} vs {m.away}",
         "League": m.league,
-        "Kickoff": fmt(m.kickoff),
+        "Kickoff (TPE)": fmt_tpe(m.kickoff),
 
         "Home": r["sim"]["home"],
         "Draw": r["sim"]["draw"],
@@ -203,36 +220,44 @@ for m, r in results:
     st.markdown("---")
 
     st.subheader(f"{m.home} vs {m.away}")
-    st.caption(f"{m.league} | ⏰ {fmt(m.kickoff)}")
+    st.caption(f"{m.league} | ⏰ {fmt_tpe(m.kickoff)} (Taipei)")
 
-    # 1X2
+    # PROBABILITIES
     c1, c2, c3 = st.columns(3)
     c1.metric("Home", f"{r['sim']['home']:.1%}")
     c2.metric("Draw", f"{r['sim']['draw']:.1%}")
     c3.metric("Away", f"{r['sim']['away']:.1%}")
 
-    # GOALS
+    # EXPECTED GOALS
     st.write("📊 Expected Goals")
     st.write(f"Home: {r['sim']['hg']:.2f}")
     st.write(f"Away: {r['sim']['ag']:.2f}")
 
     # OVER/UNDER
-    st.write("📉 Over/Under")
+    st.write("📉 Markets")
     st.write(f"O2.5: {r['sim']['over25']:.1%}")
-    st.write(f"Btts: {r['sim']['btts']:.1%}")
+    st.write(f"BTTS: {r['sim']['btts']:.1%}")
 
-    # SCORE PREDICTION (你一直罵我漏掉的)
-    st.write("⚽ Top Scorelines")
+    # SCORE PREDICTION (FIXED)
+    st.write("⚽ Score Prediction (Top 5)")
 
-    top_scores = list(r["scores"].items())[:5]
-    for s, p in top_scores:
+    for s, p in list(r["scores"].items())[:5]:
         st.write(f"{s}: {p:.2%}")
 
-    # KELLY
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Kelly H", f"{r['k_h']:.2%}")
-    k2.metric("Kelly D", f"{r['k_d']:.2%}")
-    k3.metric("Kelly A", f"{r['k_a']:.2%}")
+    # RECOMMENDATION (NEW CORE FEATURE)
+    best = r["recommendation"]["best"]
+
+    st.markdown("### 🎯 Recommended Bet")
+
+    st.success(f"""
+    **{best['side'].upper()}**
+    - Probability: {best['prob']:.1%}
+    - Odds: {best['odds']:.2f}
+    - EV: {best['ev']:+.2%}
+    - Kelly: {best['kelly']:.2%}
+    """)
+
+    st.info(f"Score Strength: {best['score']:.4f}")
 
     # SIGNAL
     if r["signal"] == Signal.SAFE:
