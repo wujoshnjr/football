@@ -22,11 +22,11 @@ def to_taipei(ts):
     except:
         return None
 
-def in_window(k):
+def in_24h(k):
     return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# DATA (REAL FIRST)
+# DATA (NO EMPTY STATE)
 # =========================
 def fetch_data():
 
@@ -58,40 +58,34 @@ def fetch_data():
         return fallback()
 
 # =========================
-# FALLBACK (GUARANTEE OUTPUT)
+# FALLBACK GUARANTEE
 # =========================
 def fallback():
     return [{
         "home_team": "Fallback FC",
         "away_team": "Quant United",
-        "commence_time": (now_taipei() + dt.timedelta(hours=3)).isoformat(),
+        "commence_time": (now_taipei() + dt.timedelta(hours=2)).isoformat(),
         "bookmakers": [{
             "markets": [{
                 "outcomes": [
-                    {"price": 2.1},
-                    {"price": 3.2},
-                    {"price": 3.6}
+                    {"price": 2.2},
+                    {"price": 3.1},
+                    {"price": 3.4}
                 ]
             }]
         }]
     }]
 
 # =========================
-# ODDS → PROBABILITY
+# CORE MODELS
 # =========================
-def probs_from_odds(odds):
-
+def probs(odds):
     p = np.array([1/o for o in odds])
     return p / p.sum()
 
-# =========================
-# MONTE CARLO (100K SIMS)
-# =========================
-def monte_carlo(probs):
-
-    outcomes = ["HOME", "DRAW", "AWAY"]
-
-    sims = np.random.choice(outcomes, size=100000, p=probs)
+def monte_carlo(p):
+    labels = ["HOME", "DRAW", "AWAY"]
+    sims = np.random.choice(labels, 100000, p=p)
 
     return {
         "HOME": np.mean(sims == "HOME"),
@@ -99,36 +93,36 @@ def monte_carlo(probs):
         "AWAY": np.mean(sims == "AWAY")
     }
 
-# =========================
-# SCORE SIMULATION
-# =========================
-def score_sim(prob):
-
-    home_lambda = 1.5 + prob[0]
-    away_lambda = 1.2 + prob[2]
-
-    hg = np.random.poisson(home_lambda)
-    ag = np.random.poisson(away_lambda)
-
+def score_sim(p):
+    hg = np.random.poisson(1.4 + p[0])
+    ag = np.random.poisson(1.2 + p[2])
     return f"{hg}-{ag}"
 
-# =========================
-# EV ENGINE
-# =========================
-def ev(sim_prob, odds):
-
-    return (sim_prob * odds) - 1
+def ev(prob, odd):
+    return (prob * odd) - 1
 
 # =========================
-# APP
+# DECISION ENGINE
 # =========================
-st.title("🏦 v32 REAL MARKET MONTE CARLO SYSTEM (100,000 SIMULATIONS)")
+def decision(ev_score, risk):
+
+    if ev_score > 0.35 and risk < 0.15:
+        return "🟢 EXECUTE"
+    elif ev_score > 0.2:
+        return "🟡 WATCH"
+    else:
+        return "🔴 NO BET"
+
+# =========================
+# APP UI
+# =========================
+st.set_page_config(layout="wide")
+
+st.title("🏦 v33 INSTITUTIONAL MONTE CARLO TRADING DESK")
 
 data = fetch_data()
 
-st.info(f"TOTAL MATCHES LOADED: {len(data)}")
-
-shown = 0
+matches = []
 
 for m in data:
 
@@ -137,7 +131,7 @@ for m in data:
 
     k = to_taipei(m.get("commence_time"))
 
-    if not in_window(k):
+    if not in_24h(k):
         continue
 
     try:
@@ -146,38 +140,65 @@ for m in data:
     except:
         continue
 
-    probs = probs_from_odds(odds)
+    p = probs(odds)
 
-    mc = monte_carlo(probs)
+    mc = monte_carlo(p)
 
-    score = score_sim(probs)
+    risk = np.std(list(mc.values()))
+
+    score = score_sim(p)
 
     ev_home = ev(mc["HOME"], odds[0])
     ev_draw = ev(mc["DRAW"], odds[1])
     ev_away = ev(mc["AWAY"], odds[2])
 
-    best = np.argmax([ev_home, ev_draw, ev_away])
-    pick = ["HOME", "DRAW", "AWAY"][best]
+    best_ev = max(ev_home, ev_draw, ev_away)
 
+    pick = ["HOME", "DRAW", "AWAY"][np.argmax([ev_home, ev_draw, ev_away])]
+
+    action = decision(best_ev, risk)
+
+    matches.append(best_ev)
+
+    # ================= UI CARD =================
     st.markdown("━━━━━━━━━━━━━━━━━━")
     st.subheader(f"{away} vs {home}")
 
-    st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
+    col1, col2, col3 = st.columns(3)
 
-    st.write("🎲 Monte Carlo (100,000 sims)")
-    st.write(mc)
+    with col1:
+        st.write("🕒 台北時間")
+        st.write(k.strftime("%Y-%m-%d %H:%M"))
+
+    with col2:
+        st.write("🎯 Pick")
+        st.success(pick)
+
+    with col3:
+        st.write("⚡ Action")
+        st.warning(action)
 
     st.write("⚽ Predicted Score:", score)
 
-    st.write("💰 EV:")
+    st.write("📊 Monte Carlo (100,000 sims)")
+    st.write(mc)
+
+    st.write("💰 EV")
     st.write({
-        "HOME": ev_home,
-        "DRAW": ev_draw,
-        "AWAY": ev_away
+        "HOME": round(ev_home, 3),
+        "DRAW": round(ev_draw, 3),
+        "AWAY": round(ev_away, 3),
     })
 
-    st.success(f"🏆 PICK: {pick}")
+# ================= SUMMARY PANEL =================
+st.markdown("━━━━━━━━━━━━━━━━━━")
+st.subheader("📊 TRADING DESK SUMMARY")
 
-    shown += 1
-
-st.success(f"TOTAL MATCHES SHOWN: {shown}")
+if matches:
+    st.write({
+        "Total Matches": len(matches),
+        "Avg EV": round(np.mean(matches), 3),
+        "Max EV": round(np.max(matches), 3),
+    })
+else:
+    st.warning("No matches in current 24h window")
