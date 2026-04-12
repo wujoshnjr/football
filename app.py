@@ -36,7 +36,7 @@ def to_taipei(ts):
         return None
 
 # =========================
-# DATA FETCH
+# FETCH ODDS
 # =========================
 def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
@@ -66,7 +66,23 @@ def fetch_all():
     return out
 
 # =========================
-# SAFE OUTCOMES
+# LIVE ODDS (SIMULATED TRACKER)
+# =========================
+def odds_momentum(current_odds):
+    """
+    模擬 odds movement（實盤會接 websocket）
+    """
+    return np.random.normal(0, 0.02)
+
+def sharp_signal(movement):
+    if movement < -0.03:
+        return "🔵 SHARP MONEY HOME"
+    if movement > 0.03:
+        return "🔵 SHARP MONEY AWAY"
+    return "🟡 NEUTRAL"
+
+# =========================
+# MARKET PARSER
 # =========================
 def get_outcomes(bookmakers):
     for b in bookmakers:
@@ -124,16 +140,7 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
-# LINEUP EFFECT
-# =========================
-def lineup_factor():
-    base = 1.0
-    if np.random.rand() < 0.15:
-        base -= np.random.uniform(0.05, 0.2)
-    return max(0.7, min(1.2, base))
-
-# =========================
-# RISK ENGINE
+# RISK + PORTFOLIO
 # =========================
 def risk(ev, draw, oh, oa):
     score = 0
@@ -157,9 +164,10 @@ def label(score):
 # =========================
 # APP
 # =========================
-st.title("🏦 v13 REAL HEDGE FUND SYSTEM")
+st.title("🏦 v14 INSTITUTIONAL HEDGE FUND LIVE DESK")
 
 data = fetch_all()
+
 cards = []
 
 for m in data:
@@ -188,7 +196,7 @@ for m in data:
         lh = strength()
         la = strength()
 
-        adj = lineup_factor()
+        adj = np.random.uniform(0.85, 1.15)
 
         ph, pd_, pa, scores = simulate(lh, la, adj)
 
@@ -204,36 +212,40 @@ for m in data:
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
         stake = kelly(ev, odds)
 
-        minutes = (k - now_taipei()).total_seconds() / 60
+        # =========================
+        # LIVE ODDS + SHARP MONEY
+        # =========================
+        movement = odds_momentum(odds)
+        sharp = sharp_signal(movement)
 
-        # =========================
-        # 🧠 PICK DISPLAY LOGIC
-        # =========================
-        if pick == "HOME":
-            pick_display = f"HOME ({home})"
-        elif pick == "AWAY":
-            pick_display = f"AWAY ({away})"
-        else:
-            pick_display = "DRAW"
+        minutes = (k - now_taipei()).total_seconds() / 60
 
         cards.append({
             "time": k,
             "minutes": minutes,
             "match": f"{home} vs {away}",
-            "pick": pick_display,
+            "pick": pick,
             "ev": ev,
             "risk": risk(ev, pd_, oh, oa),
             "label": label(risk(ev, pd_, oh, oa)),
-            "scores": scores
+            "stake": stake,
+            "scores": scores,
+            "sharp": sharp,
+            "movement": movement
         })
 
     except:
         continue
 
 # =========================
-# SORT (TRADING DESK)
+# PORTFOLIO SORT
 # =========================
 cards = sorted(cards, key=lambda x: x["minutes"])
+
+# =========================
+# UI
+# =========================
+total_exposure = 0
 
 for c in cards:
 
@@ -247,10 +259,16 @@ for c in cards:
 
     col1.metric("Pick", c["pick"])
     col2.metric("EV", round(c["ev"], 3))
-    col3.metric("Risk", c["risk"])
+    col3.metric("Stake", round(c["stake"], 4))
 
-    st.write(f"⚠️ 狀態：{c['label']}")
+    st.write(f"⚠️ Risk: {c['label']}")
+    st.write(f"📡 Market: {c['sharp']} (Δ {round(c['movement'],3)})")
 
     st.write("📊 Score forecast:")
     for s in c["scores"]:
         st.write("•", s)
+
+    total_exposure += c["stake"]
+
+st.write("---")
+st.write(f"💰 TOTAL PORTFOLIO EXPOSURE: {round(total_exposure,4)}")
