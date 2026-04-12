@@ -1,48 +1,17 @@
 # ============================================
-# INSTITUTIONAL FOOTBALL TRADING SYSTEM v5 FIXED
-# FULL COMPLETE VERSION (NO LOSS OF ORIGINAL MODELS)
+# INSTITUTIONAL FOOTBALL TRADING SYSTEM v5.1 FIXED
+# Hedge Fund Grade Betting Engine (FULL FIX)
 # ============================================
 
 import os
-import asyncio
 import numpy as np
 import pandas as pd
 import streamlit as st
-import pytz
 from datetime import datetime, timedelta
+import pytz
 from dataclasses import dataclass
-from enum import Enum
-
-# FIX: safe imports (avoid crash)
-try:
-    import aiohttp
-except:
-    aiohttp = None
-
-try:
-    from scipy import stats
-except:
-    stats = None
-
-# ============================================
-# CONFIG
-# ============================================
-
-TZ = pytz.timezone("Asia/Taipei")
-
-st.set_page_config(
-    page_title="Institutional Football Trading Desk",
-    layout="wide"
-)
-
-# ============================================
-# ENUMS
-# ============================================
-
-class TrapSignal(Enum):
-    OK = "OK"
-    WARNING = "WARNING"
-    TRAP = "TRAP"
+from typing import List, Tuple
+from scipy.stats import poisson
 
 # ============================================
 # DATA STRUCTURES
@@ -60,197 +29,192 @@ class Match:
     away: Team
     league: str
     kickoff: datetime
-    odds: tuple
+    odds: Tuple[float, float, float]
 
 # ============================================
-# CORE MONTE CARLO (你要的100000保留)
+# TIME SYSTEM (FIXED - TAIPEI)
 # ============================================
 
-class MonteCarlo:
-    def simulate(self, n=100000):
-        home = np.random.poisson(1.6, n)
-        away = np.random.poisson(1.2, n)
-
-        return {
-            "home_win": np.mean(home > away),
-            "draw": np.mean(home == away),
-            "away_win": np.mean(home < away),
-            "avg_home": np.mean(home),
-            "avg_away": np.mean(away),
-            "score_dist": {
-                "2-1": 0.13,
-                "1-1": 0.12,
-                "1-0": 0.11,
-                "2-0": 0.09
-            }
-        }
+def to_taipei_time(dt):
+    tz = pytz.timezone("Asia/Taipei")
+    return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M")
 
 # ============================================
-# POISSON MODEL
+# POISSON MODEL (FIXED BIAS)
 # ============================================
 
 class PoissonModel:
+
     def predict(self, match):
+
+        home_strength = match.home.atk * match.away.dfd
+        away_strength = match.away.atk * match.home.dfd
+
+        # ✅ FIXED HOME ADVANTAGE (之前錯誤核心)
+        home_lambda = (home_strength * 1.25) / 1.15
+        away_lambda = (away_strength * 1.05) / 1.15
+
+        home_goals = poisson.pmf(range(6), home_lambda)
+        away_goals = poisson.pmf(range(6), away_lambda)
+
+        # Monte Carlo approximation probabilities
+        home_prob = min(max(home_lambda / (home_lambda + away_lambda), 0.05), 0.85)
+        away_prob = min(max(away_lambda / (home_lambda + away_lambda), 0.05), 0.85)
+        draw_prob = max(0.10, 1 - home_prob - away_prob)
+
         return {
-            "home": 0.45,
-            "draw": 0.28,
-            "away": 0.27,
-            "xg_home": match.home.atk * 1.3,
-            "xg_away": match.away.atk * 1.1
+            "home": home_prob,
+            "draw": draw_prob,
+            "away": away_prob,
+            "xg_home": home_lambda,
+            "xg_away": away_lambda
         }
 
 # ============================================
-# BETTING ENGINE (EV + KELLY)
+# MONTE CARLO (100K SIMULATION FIXED)
 # ============================================
 
-class BettingEngine:
+class MonteCarlo:
 
-    def ev(self, prob, odds):
-        return prob * odds - 1
+    def simulate(self, home_xg, away_xg, n=100000):
 
-    def kelly(self, prob, odds):
-        b = odds - 1
-        return max(0, (b * prob - (1 - prob)) / b)
+        home = np.random.poisson(home_xg, n)
+        away = np.random.poisson(away_xg, n)
+
+        home_win = np.mean(home > away)
+        draw = np.mean(home == away)
+        away_win = np.mean(home < away)
+
+        return {
+            "home": home_win,
+            "draw": draw,
+            "away": away_win,
+            "avg_home_goals": np.mean(home),
+            "avg_away_goals": np.mean(away),
+        }
 
 # ============================================
-# MATCH GENERATOR (修正：更多場次)
+# KELLY + EV (SAFE)
 # ============================================
 
-def generate_matches(n=40):   # ✔ FIX: 40場
+def ev(prob, odds):
+    return (prob * odds) - 1
+
+def kelly(prob, odds):
+    b = odds - 1
+    if b <= 0:
+        return 0
+    k = ((b * prob) - (1 - prob)) / b
+    return max(0, min(k, 0.05))  # cap 5%
+
+# ============================================
+# MATCH GENERATOR (40+ MATCHES FIXED)
+# ============================================
+
+def generate_matches():
 
     teams = [
-        "Arsenal", "Chelsea", "Man City", "Liverpool",
-        "Real Madrid", "Barcelona", "Bayern", "PSG",
-        "Inter", "Juventus", "Atletico", "Dortmund"
+        ("Arsenal", 1.35, 0.95),
+        ("Chelsea", 1.25, 1.05),
+        ("Liverpool", 1.50, 0.90),
+        ("Man City", 1.65, 0.85),
+        ("Real Madrid", 1.60, 0.88),
+        ("Barcelona", 1.45, 0.95),
+        ("Bayern", 1.70, 0.80),
+        ("PSG", 1.40, 1.00),
+        ("Inter", 1.30, 1.05),
+        ("Juventus", 1.20, 1.10),
     ]
 
     matches = []
+    base = datetime(2026, 1, 1, 18, 0)
 
-    for i in range(n):
+    # ✅ FIX: 40+ matches
+    for i in range(40):
 
-        home = Team(
-            name=np.random.choice(teams),
-            atk=np.random.uniform(1.0, 1.6),
-            dfd=np.random.uniform(0.8, 1.2)
-        )
+        home = teams[np.random.randint(len(teams))]
+        away = teams[np.random.randint(len(teams))]
 
-        away = Team(
-            name=np.random.choice(teams),
-            atk=np.random.uniform(1.0, 1.6),
-            dfd=np.random.uniform(0.8, 1.2)
-        )
+        while away[0] == home[0]:
+            away = teams[np.random.randint(len(teams))]
 
-        kickoff = datetime.utcnow() + timedelta(hours=i)
+        kickoff = base + timedelta(hours=i * 3)
 
         matches.append(
             Match(
-                home=home,
-                away=away,
-                league="EURO FOOTBALL",
+                home=Team(*home),
+                away=Team(*away),
+                league="EURO LEAGUE",
                 kickoff=kickoff,
-                odds=(1.8, 3.4, 4.2)
+                odds=(
+                    round(np.random.uniform(1.5, 2.5), 2),
+                    round(np.random.uniform(3.0, 4.2), 2),
+                    round(np.random.uniform(3.2, 5.5), 2),
+                )
             )
         )
 
     return matches
 
 # ============================================
-# MODEL PIPELINE
-# ============================================
-
-def analyze(match, mc, model, bet):
-
-    sim = mc.simulate(100000)
-
-    pred = model.predict(match)
-
-    ev_home = bet.ev(pred["home"], match.odds[0])
-    ev_draw = bet.ev(pred["draw"], match.odds[1])
-    ev_away = bet.ev(pred["away"], match.odds[2])
-
-    kelly_home = bet.kelly(pred["home"], match.odds[0])
-
-    return {
-        "sim": sim,
-        "pred": pred,
-        "ev": {
-            "home": ev_home,
-            "draw": ev_draw,
-            "away": ev_away
-        },
-        "kelly": kelly_home
-    }
-
-# ============================================
-# UI FIXED (你三個問題全部修掉)
-# ============================================
-
-def render_match(match, res):
-
-    # ✔ FIX 2: team ALWAYS visible
-    st.markdown("----")
-
-    st.markdown(f"""
-    ## ⚽ {match.home.name} vs {match.away.name}
-    **{match.league}**
-
-    🕒 Kickoff (Taipei Time):
-    {match.kickoff.astimezone(TZ).strftime("%Y-%m-%d %H:%M")}
-    """)
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric("HOME", f"{res['pred']['home']:.1%}")
-    c2.metric("DRAW", f"{res['pred']['draw']:.1%}")
-    c3.metric("AWAY", f"{res['pred']['away']:.1%}")
-
-    st.write("### xG")
-    st.write(res["pred"]["xg_home"], res["pred"]["xg_away"])
-
-    st.write("### Monte Carlo (100k)")
-    st.json(res["sim"])
-
-    st.write("### EV Betting")
-
-    st.write("Home EV:", res["ev"]["home"])
-    st.write("Draw EV:", res["ev"]["draw"])
-    st.write("Away EV:", res["ev"]["away"])
-
-    best = max(res["ev"], key=res["ev"].get)
-
-    st.success(f"Best Bet: {best.upper()}")
-
-# ============================================
-# DASHBOARD
+# STREAMLIT UI (FIXED DISPLAY)
 # ============================================
 
 def main():
 
-    st.title("🏦 Institutional Football Trading Desk v5 FULL")
+    st.set_page_config(page_title="Football Hedge Fund v5.1", layout="wide")
 
-    mc = MonteCarlo()
+    st.title("🏦 Football Trading System v5.1 FIXED")
+    st.markdown("### Hedge Fund Simulation Engine (Corrected)")
+
     model = PoissonModel()
-    bet = BettingEngine()
+    mc = MonteCarlo()
 
-    # ✔ FIX 1: 更多場次
-    matches = generate_matches(40)
+    matches = generate_matches()
 
-    left, mid, right = st.columns([2, 2, 2])
+    st.success(f"Loaded {len(matches)} matches")
 
-    with left:
-        st.header("📊 Matches")
+    for m in matches:
 
-        for m in matches:
-            res = analyze(m, mc, model, bet)
-            render_match(m, res)
+        pred = model.predict(m)
+        sim = mc.simulate(pred["xg_home"], pred["xg_away"])
 
-    with mid:
-        st.header("🧠 Model")
-        st.info("Poisson + Monte Carlo 100K + EV + Kelly ACTIVE")
+        st.markdown("---")
 
-    with right:
-        st.header("💰 Betting Panel")
-        st.warning("Value betting system running")
+        # ================= FIXED MATCH UI =================
+        col1, col2, col3 = st.columns([3, 1, 1])
+
+        with col1:
+            st.subheader(f"{m.home.name} vs {m.away.name}")
+            st.write(f"🏆 {m.league}")
+            st.write(f"🕒 Kickoff: {to_taipei_time(m.kickoff)}")
+
+        with col2:
+            st.metric("Home Prob", f"{sim['home']:.2%}")
+            st.metric("Draw Prob", f"{sim['draw']:.2%}")
+            st.metric("Away Prob", f"{sim['away']:.2%}")
+
+        with col3:
+            ev_home = ev(sim["home"], m.odds[0])
+            ev_draw = ev(sim["draw"], m.odds[1])
+            ev_away = ev(sim["away"], m.odds[2])
+
+            st.write("📊 EV:")
+            st.write(f"H: {ev_home:.2f}")
+            st.write(f"D: {ev_draw:.2f}")
+            st.write(f"A: {ev_away:.2f}")
+
+            st.write("💰 Kelly:")
+            st.write(f"H: {kelly(sim['home'], m.odds[0]):.2%}")
+            st.write(f"D: {kelly(sim['draw'], m.odds[1]):.2%}")
+            st.write(f"A: {kelly(sim['away'], m.odds[2]):.2%}")
+
+        st.write(f"⚽ xG: {pred['xg_home']:.2f} - {pred['xg_away']:.2f}")
+        st.write(f"📈 Avg Goals: {sim['avg_home_goals']:.2f} - {sim['avg_away_goals']:.2f}")
+
+# ============================================
+# RUN
+# ============================================
 
 if __name__ == "__main__":
     main()
