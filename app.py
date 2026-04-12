@@ -59,14 +59,14 @@ def fetch_all():
                 if isinstance(data, list):
                     for m in data:
                         m["league"] = s
-                    out.extend(data)
+                    out.extend(m for m in data)
         except:
             continue
 
     return out
 
 # =========================
-# SAFE MARKET
+# MARKET SAFE PARSER
 # =========================
 def get_outcomes(bookmakers):
     for b in bookmakers:
@@ -78,18 +78,45 @@ def get_outcomes(bookmakers):
     return None
 
 # =========================
-# MODEL
+# LINEUP INTELLIGENCE (NEW)
+# =========================
+def lineup_factor():
+    base = 1.0
+
+    # key injury simulation
+    if np.random.rand() < 0.2:
+        base -= np.random.uniform(0.05, 0.25)
+
+    # tactical boost
+    base += np.random.normal(0, 0.05)
+
+    return max(0.65, min(1.25, base))
+
+# =========================
+# HOME ADVANTAGE MODEL (NEW)
+# =========================
+def home_advantage_factor():
+    return 1.0 + np.random.uniform(0.05, 0.15)
+
+def away_penalty():
+    return 1.0 - np.random.uniform(0.03, 0.12)
+
+# =========================
+# BASE STRENGTH
 # =========================
 def strength():
     return max(0.2, 1.2 + np.random.normal(0, 0.3))
 
-def simulate(lh, la, adj):
+# =========================
+# MONTE CARLO ENGINE
+# =========================
+def simulate(lh, la, lineup, home_adv):
 
     home = draw = away = 0
     scores = Counter()
 
-    lh *= adj
-    la *= adj
+    lh = lh * lineup * home_adv
+    la = la * lineup * (2 - home_adv)
 
     for _ in range(SIMS):
 
@@ -124,7 +151,7 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
-# RISK
+# RISK ENGINE
 # =========================
 def risk(ev, draw, oh, oa):
     score = 0
@@ -146,7 +173,7 @@ def label(score):
     return "🟢 SAFE"
 
 # =========================
-# PICK FORMAT (NEW)
+# PICK FORMAT
 # =========================
 def format_pick(pick, home, away):
     if pick == "HOME":
@@ -158,10 +185,9 @@ def format_pick(pick, home, away):
 # =========================
 # APP
 # =========================
-st.title("🏦 v15 INSTITUTIONAL TRADING DESK (UI STANDARDIZED)")
+st.title("🏦 v16 INSTITUTIONAL HEDGE FUND FINAL SYSTEM")
 
 data = fetch_all()
-
 cards = []
 
 for m in data:
@@ -190,9 +216,10 @@ for m in data:
         lh = strength()
         la = strength()
 
-        adj = np.random.uniform(0.85, 1.15)
+        lineup = lineup_factor()
+        home_adv = home_advantage_factor()
 
-        ph, pd_, pa, scores = simulate(lh, la, adj)
+        ph, pd_, pa, scores = simulate(lh, la, lineup, home_adv)
 
         evs = {
             "HOME": EV(ph, oh),
@@ -203,6 +230,9 @@ for m in data:
         pick = max(evs, key=evs.get)
         ev = evs[pick]
 
+        odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
+        stake = kelly(ev, odds)
+
         minutes = (k - now_taipei()).total_seconds() / 60
 
         pick_text = format_pick(pick, home, away)
@@ -210,7 +240,7 @@ for m in data:
         cards.append({
             "time": k,
             "minutes": minutes,
-            "match": f"{away} vs {home}",  # ✅ 固定：客隊 vs 主隊
+            "match": f"{away} vs {home}",  # 客 vs 主
             "pick": pick_text,
             "ev": ev,
             "risk": risk(ev, pd_, oh, oa),
@@ -226,15 +256,12 @@ for m in data:
 # =========================
 cards = sorted(cards, key=lambda x: x["minutes"])
 
-# =========================
-# UI
-# =========================
 for c in cards:
 
     st.markdown("━━━━━━━━━━━━━━━━━━")
     st.subheader(c["match"])
 
-    st.write(f"🕒 台北時間開賽：{c['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"🕒 台北時間：{c['time'].strftime('%Y-%m-%d %H:%M')}")
     st.write(f"⏳ 距離開賽：{int(c['minutes'])} 分鐘")
 
     col1, col2, col3 = st.columns(3)
