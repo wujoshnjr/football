@@ -42,12 +42,8 @@ SPORTS = [
 # FETCH
 # =========================
 def fetch_all():
-    try:
-        key = st.secrets["API_KEYS"]["ODDS_API"]
-    except:
-        return []
-
-    data = []
+    key = st.secrets["API_KEYS"]["ODDS_API"]
+    out = []
 
     for s in SPORTS:
         try:
@@ -69,30 +65,38 @@ def fetch_all():
             if isinstance(d, list):
                 for i in d:
                     i["league"] = s
-                data.extend(d)
+                out.extend(d)
 
         except:
             continue
 
-    return data
+    return out
 
 # =========================
-# MODEL
+# STRENGTH (更真實波動)
 # =========================
-def team_strength():
-    base = 1.3 + np.random.normal(0, 0.2)
-    form = np.clip(np.random.normal(0.5, 0.15), 0.2, 0.8)
-    return base * (0.8 + form)
+def strength():
+    base = 1.2 + np.random.normal(0, 0.25)
+    form = np.random.beta(2, 2)
+    return max(0.2, base * (0.7 + form))
 
-def simulate_match(lh, la):
+# =========================
+# SCORE MODEL（修正爆冷分布）
+# =========================
+def simulate(lh, la):
 
     home = draw = away = 0
     scores = Counter()
 
     for _ in range(SIMS):
 
-        hg = np.random.poisson(lh)
-        ag = np.random.poisson(la)
+        # 🔥 variance injection（修正比分集中問題）
+        hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.4)))
+        ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.4)))
+
+        # ⚡ upset shock
+        if np.random.rand() < 0.03:
+            hg, ag = ag, hg
 
         scores[(hg, ag)] += 1
 
@@ -104,8 +108,7 @@ def simulate_match(lh, la):
             away += 1
 
     total = SIMS
-
-    top = scores.most_common(3)
+    top = scores.most_common(5)
 
     def fmt(s, c):
         return f"{s[0]}-{s[1]} ({round(c/total*100,1)}%)"
@@ -114,13 +117,11 @@ def simulate_match(lh, la):
         home/total,
         draw/total,
         away/total,
-        fmt(*top[0]) if len(top) > 0 else "-",
-        fmt(*top[1]) if len(top) > 1 else "-",
-        fmt(*top[2]) if len(top) > 2 else "-"
+        [fmt(*x) for x in top]
     )
 
 # =========================
-# BETTING LOGIC
+# EV / KELLY
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
@@ -129,29 +130,38 @@ def kelly(ev, odds):
     b = odds - 1
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
-def recommend(p_home, p_draw, p_away, scores):
+# =========================
+# ⚠️ RISK ENGINE（新增）
+# =========================
+def risk_score(ev, draw_prob, odds_home, odds_away):
 
-    total_goals = []
-    btts_yes = 0
+    score = 0
 
-    for s in scores:
-        hg, ag = s
-        total_goals.append(hg + ag)
-        if hg > 0 and ag > 0:
-            btts_yes += 1
+    if draw_prob > 0.28:
+        score += 30
 
-    avg_goals = np.mean(total_goals) if total_goals else 2.5
-    btts_prob = btts_yes / len(scores) if scores else 0.5
+    if min(odds_home, odds_away) < 1.6:
+        score += 25
 
-    ou = "OVER 2.5" if avg_goals > 2.5 else "UNDER 2.5"
-    btts = "BTTS YES" if btts_prob > 0.5 else "BTTS NO"
+    if ev < 0:
+        score += 30
 
-    return ou, btts
+    return min(score, 100)
+
+def risk_label(score):
+
+    if score > 70:
+        return "🔴 DANGEROUS"
+    if score > 45:
+        return "🟠 RISKY"
+    if score > 20:
+        return "🟡 NORMAL"
+    return "🟢 SAFE"
 
 # =========================
-# APP UI
+# APP
 # =========================
-st.title("🏦 FOOTBALL AI v7.5（PRO UI + BETTING ENGINE）")
+st.title("🏦 v8 TRADING SYSTEM (FULL RISK + SCORE + EV)")
 
 data = fetch_all()
 
@@ -178,10 +188,10 @@ for m in data:
         od = float(outs[1]["price"])
         oa = float(outs[2]["price"])
 
-        lh = team_strength()
-        la = team_strength()
+        lh = strength()
+        la = strength()
 
-        ph, pd_, pa, s1, s2, s3 = simulate_match(lh, la)
+        ph, pd_, pa, scores = simulate(lh, la)
 
         evs = {
             "HOME": EV(ph, oh),
@@ -192,23 +202,29 @@ for m in data:
         pick = max(evs, key=evs.get)
         ev = evs[pick]
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
+
         stake = kelly(ev, odds)
 
-        # UI CARD
+        risk = risk_score(ev, pd_, oh, oa)
+        label = risk_label(risk)
+
+        # ================= UI =================
         st.markdown("---")
         st.subheader(f"⚽ {home} vs {away}")
         st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
-        col1.metric("推薦", pick)
+        col1.metric("Pick", pick)
         col2.metric("EV", round(ev, 3))
-        col3.metric("Stake", round(stake*100000, 2))
+        col3.metric("Risk", risk)
+        col4.metric("Stake", round(stake*100000, 2))
 
-        st.write("### 📊 預測比分")
-        st.write(f"🥇 {s1}")
-        st.write(f"🥈 {s2}")
-        st.write(f"🥉 {s3}")
+        st.write(f"⚠️ 狀態：{label}")
+
+        st.write("### 📊 比分預測（Top 5）")
+        for s in scores:
+            st.write("•", s)
 
     except:
         continue
