@@ -7,12 +7,12 @@ from zoneinfo import ZoneInfo
 import sqlite3
 
 # =========================
-# TIMEZONE
+# TIME CONFIG
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# SECRETS SAFE LOAD
+# SAFE SECRETS
 # =========================
 def key(name):
     try:
@@ -23,9 +23,9 @@ def key(name):
 ODDS_API = key("ODDS_API")
 
 # =========================
-# DB
+# DB (Execution Layer)
 # =========================
-conn = sqlite3.connect("core.db", check_same_thread=False)
+conn = sqlite3.connect("institutional.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS trades (
 conn.commit()
 
 # =========================
-# API FETCH
+# DATA LAYER
 # =========================
 def safe_get(url, params=None):
     try:
@@ -71,12 +71,18 @@ def fetch_matches():
         try:
             home = m["home_team"]
             away = m["away_team"]
-            odds = m["bookmakers"][0]["markets"][0]["outcomes"]
+
+            books = m.get("bookmakers", [])
+            if not books:
+                continue
+
+            outcomes = books[0]["markets"][0]["outcomes"]
 
             rows.append({
                 "match": f"{home} vs {away}",
-                "home_odds": odds[0]["price"],
-                "away_odds": odds[1]["price"]
+                "home_odds": outcomes[0]["price"],
+                "away_odds": outcomes[1]["price"],
+                "time": dt.datetime.now(TAIPEI)
             })
         except:
             continue
@@ -111,14 +117,14 @@ def kelly(p, odds):
 def simulate(edge, odds, n=20000):
     p = 0.5 + edge
     return np.mean([
-        (odds-1 if np.random.rand()<p else -1)
+        (odds - 1 if np.random.rand() < p else -1)
         for _ in range(n)
     ])
 
 # =========================
 # APP
 # =========================
-st.title("🏦 FINAL INSTITUTIONAL FULL MERGE")
+st.title("🏦 FINAL REBUILD — INSTITUTIONAL CORE")
 
 df = fetch_matches()
 
@@ -128,7 +134,7 @@ if df.empty:
 
 results = []
 
-bankroll = 100000
+BANKROLL = 100000
 
 for _, r in df.iterrows():
 
@@ -140,8 +146,8 @@ for _, r in df.iterrows():
     pick_odds = r["home_odds"] if e > 0 else r["away_odds"]
 
     # APL 2
-    size = kelly(0.5 + e, pick_odds)
-    stake = bankroll * size * 0.1
+    k = kelly(0.5 + e, pick_odds)
+    stake = BANKROLL * k * 0.1
 
     # APL 3
     pnl = simulate(e, pick_odds)
@@ -169,14 +175,15 @@ for _, r in df.iterrows():
 out = pd.DataFrame(results).sort_values("edge", ascending=False)
 
 # =========================
-# UI
+# DASHBOARD
 # =========================
 st.subheader("📊 SIGNALS")
 st.dataframe(out)
 
-st.subheader("💰 METRICS")
+st.subheader("💰 PERFORMANCE")
+
 st.metric("Avg Edge", round(out["edge"].mean(),4))
 st.metric("Total Sim PnL", round(out["sim_pnl"].sum(),2))
 st.metric("Trades", len(out))
 
-st.success("FULL INSTITUTIONAL SYSTEM ONLINE ✔")
+st.success("INSTITUTIONAL CORE RUNNING ✔")
