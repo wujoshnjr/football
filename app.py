@@ -8,7 +8,7 @@ import pandas as pd
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME
+# TIME SYSTEM
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -26,36 +26,48 @@ def in_24h(k):
     return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# DATA (NO EMPTY STATE)
+# MULTI LEAGUE DATA (NO EMPTY STATE)
 # =========================
 def fetch_data():
 
     key = st.secrets.get("API_KEYS", {}).get("ODDS_API")
 
+    leagues = [
+        "soccer_epl",
+        "soccer_spain_la_liga",
+        "soccer_italy_serie_a",
+        "soccer_germany_bundesliga",
+        "soccer_france_ligue_one",
+        "soccer_usa_mls"
+    ]
+
+    all_data = []
+
     if not key:
         return fallback()
 
-    try:
-        r = requests.get(
-            "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
-            params={
-                "api_key": key,
-                "regions": "eu",
-                "markets": "h2h",
-                "oddsFormat": "decimal"
-            },
-            timeout=10
-        )
+    for lg in leagues:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{lg}/odds",
+                params={
+                    "api_key": key,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal"
+                },
+                timeout=10
+            )
 
-        if r.status_code != 200:
-            return fallback()
+            if r.status_code == 200:
+                d = r.json()
+                if isinstance(d, list):
+                    all_data.extend(d)
 
-        data = r.json()
+        except:
+            continue
 
-        return data if data else fallback()
-
-    except:
-        return fallback()
+    return all_data if all_data else fallback()
 
 # =========================
 # FALLBACK GUARANTEE
@@ -64,27 +76,32 @@ def fallback():
     return [{
         "home_team": "Fallback FC",
         "away_team": "Quant United",
-        "commence_time": (now_taipei() + dt.timedelta(hours=2)).isoformat(),
+        "commence_time": (now_taipei() + dt.timedelta(hours=3)).isoformat(),
         "bookmakers": [{
             "markets": [{
                 "outcomes": [
                     {"price": 2.2},
                     {"price": 3.1},
-                    {"price": 3.4}
+                    {"price": 3.5}
                 ]
             }]
         }]
     }]
 
 # =========================
-# CORE MODELS
+# MARKET ENGINE
 # =========================
-def probs(odds):
+def implied_probs(odds):
     p = np.array([1/o for o in odds])
     return p / p.sum()
 
+# =========================
+# MONTE CARLO (100,000 SIMS)
+# =========================
 def monte_carlo(p):
+
     labels = ["HOME", "DRAW", "AWAY"]
+
     sims = np.random.choice(labels, 100000, p=p)
 
     return {
@@ -93,20 +110,29 @@ def monte_carlo(p):
         "AWAY": np.mean(sims == "AWAY")
     }
 
-def score_sim(p):
+# =========================
+# SCORE MODEL (POISSON)
+# =========================
+def score_model(p):
+
     hg = np.random.poisson(1.4 + p[0])
     ag = np.random.poisson(1.2 + p[2])
+
     return f"{hg}-{ag}"
 
-def ev(prob, odd):
-    return (prob * odd) - 1
+# =========================
+# EV CALIBRATION (FINAL FIX)
+# =========================
+def ev(mc_prob, imp_prob, odds):
+
+    return (mc_prob - imp_prob) * odds
 
 # =========================
 # DECISION ENGINE
 # =========================
-def decision(ev_score, risk):
+def decision(ev_score):
 
-    if ev_score > 0.35 and risk < 0.15:
+    if ev_score > 0.35:
         return "🟢 EXECUTE"
     elif ev_score > 0.2:
         return "🟡 WATCH"
@@ -118,7 +144,7 @@ def decision(ev_score, risk):
 # =========================
 st.set_page_config(layout="wide")
 
-st.title("🏦 v33 INSTITUTIONAL MONTE CARLO TRADING DESK")
+st.title("🏦 FINAL CONSOLIDATED INSTITUTIONAL QUANT TRADING DESK")
 
 data = fetch_data()
 
@@ -140,23 +166,23 @@ for m in data:
     except:
         continue
 
-    p = probs(odds)
+    imp = implied_probs(odds)
 
-    mc = monte_carlo(p)
+    mc = monte_carlo(imp)
 
-    risk = np.std(list(mc.values()))
+    score = score_model(imp)
 
-    score = score_sim(p)
+    ev_home = ev(mc["HOME"], imp[0], odds[0])
+    ev_draw = ev(mc["DRAW"], imp[1], odds[1])
+    ev_away = ev(mc["AWAY"], imp[2], odds[2])
 
-    ev_home = ev(mc["HOME"], odds[0])
-    ev_draw = ev(mc["DRAW"], odds[1])
-    ev_away = ev(mc["AWAY"], odds[2])
+    evs = [ev_home, ev_draw, ev_away]
 
-    best_ev = max(ev_home, ev_draw, ev_away)
+    best_idx = np.argmax(evs)
+    pick = ["HOME", "DRAW", "AWAY"][best_idx]
+    best_ev = evs[best_idx]
 
-    pick = ["HOME", "DRAW", "AWAY"][np.argmax([ev_home, ev_draw, ev_away])]
-
-    action = decision(best_ev, risk)
+    action = decision(best_ev)
 
     matches.append(best_ev)
 
@@ -171,16 +197,16 @@ for m in data:
         st.write(k.strftime("%Y-%m-%d %H:%M"))
 
     with col2:
-        st.write("🎯 Pick")
+        st.write("🎯 PICK")
         st.success(pick)
 
     with col3:
-        st.write("⚡ Action")
+        st.write("⚡ ACTION")
         st.warning(action)
 
-    st.write("⚽ Predicted Score:", score)
+    st.write("⚽ Score Prediction:", score)
 
-    st.write("📊 Monte Carlo (100,000 sims)")
+    st.write("📊 Monte Carlo (100,000)")
     st.write(mc)
 
     st.write("💰 EV")
@@ -190,7 +216,7 @@ for m in data:
         "AWAY": round(ev_away, 3),
     })
 
-# ================= SUMMARY PANEL =================
+# ================= SUMMARY =================
 st.markdown("━━━━━━━━━━━━━━━━━━")
 st.subheader("📊 TRADING DESK SUMMARY")
 
