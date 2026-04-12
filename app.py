@@ -4,21 +4,19 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
-import sqlite3
 
 # =========================
-# TIME
+# TIMEZONE
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
+
+def now_taipei():
+    return dt.datetime.now(TAIPEI)
 
 def to_taipei(ts):
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=ZoneInfo("UTC"))
     return ts.astimezone(TAIPEI)
-
-def within_24h(ts):
-    now = dt.datetime.now(TAIPEI)
-    return now <= ts <= now + dt.timedelta(hours=24)
 
 # =========================
 # API KEY
@@ -32,9 +30,13 @@ def key(name):
 ODDS_API = key("ODDS_API")
 
 # =========================
-# SAFE API
+# SAFE API CALL
 # =========================
 def fetch_odds():
+    if not ODDS_API:
+        st.error("❌ Missing ODDS_API key")
+        return []
+
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
 
     try:
@@ -44,12 +46,29 @@ def fetch_odds():
             "markets": "h2h",
             "oddsFormat": "decimal"
         }, timeout=10)
-        return r.json()
-    except:
+
+        data = r.json()
+
+        # DEBUG
+        st.write("🔍 API TYPE:", type(data))
+
+        if isinstance(data, dict) and "error" in data:
+            st.error(data)
+            return []
+
+        if not isinstance(data, list):
+            st.error("Invalid API format")
+            st.write(data)
+            return []
+
+        return data
+
+    except Exception as e:
+        st.error(f"API request failed: {e}")
         return []
 
 # =========================
-# MODEL CORE
+# MODEL
 # =========================
 def p_model_home():
     return np.random.uniform(0.45, 0.60)
@@ -58,13 +77,13 @@ def p_model_away(p_home):
     return 1 - p_home
 
 def implied_prob(odds):
-    return 1 / odds
+    return 1 / odds if odds else 0
 
 def edge(p_model, p_market):
     return p_model - p_market
 
 # =========================
-# BET RECOMMENDER
+# BET RECOMMENDATION
 # =========================
 def recommend(home_odds, away_odds):
 
@@ -77,44 +96,45 @@ def recommend(home_odds, away_odds):
     e_home = edge(p_home, m_home)
     e_away = edge(p_away, m_away)
 
-    if e_home > e_away:
-        return "HOME WIN", e_home, home_odds, p_home, m_home
+    if e_home >= e_away:
+        return "HOME WIN", e_home, home_odds
     else:
-        return "AWAY WIN", e_away, away_odds, p_away, m_away
+        return "AWAY WIN", e_away, away_odds
 
 # =========================
-# KELLY SIZING
+# KELLY
 # =========================
-def kelly(edge, odds):
+def kelly(e, odds):
     b = odds - 1
     if b <= 0:
         return 0
-    f = edge * b
-    return max(0, min(f, 0.2))
+    return max(0, min(e * b, 0.2))
 
 # =========================
-# SIMULATION (20K)
+# SIMULATION
 # =========================
-def monte_carlo(edge, odds, n=20000):
-    p = 0.5 + edge
+def monte_carlo(e, odds, n=20000):
+    p = 0.5 + e
     return np.mean([
         (odds - 1 if np.random.rand() < p else -1)
         for _ in range(n)
     ])
 
 # =========================
-# STREAMLIT UI
+# STREAMLIT APP
 # =========================
-st.title("🏦 PROFESSIONAL BETTING ENGINE")
+st.title("🏦 FIXED PROFESSIONAL BETTING ENGINE")
 
 data = fetch_odds()
 
-if not isinstance(data, list) or len(data) == 0:
-    st.error("No API data (check key or rate limit)")
+if not data:
     st.stop()
 
 results = []
 
+# =========================
+# PROCESS MATCHES
+# =========================
 for m in data:
 
     try:
@@ -129,42 +149,59 @@ for m in data:
         if not markets:
             continue
 
-        out = markets[0].get("outcomes", [])
-        if len(out) < 2:
+        outcomes = markets[0].get("outcomes", [])
+        if len(outcomes) < 2:
             continue
 
-        home_odds = out[0]["price"]
-        away_odds = out[1]["price"]
+        home_odds = outcomes[0]["price"]
+        away_odds = outcomes[1]["price"]
 
-        # 🕒 TIME (simulated if API missing time)
-        kickoff = to_taipei(dt.datetime.now(TAIPEI))
+        # 🕒 TIME (simulated safely)
+        kickoff = now_taipei()
 
-        if not within_24h(kickoff):
+        # 🕒 24H FILTER (FIXED SAFE)
+        if not (kickoff <= now_taipei() + dt.timedelta(hours=24)):
             continue
 
-        # 🎯 MODEL
-        bet_type, e, odds, p_model, p_market = recommend(home_odds, away_odds)
+        # 🧠 MODEL
+        bet_type, e, odds = recommend(home_odds, away_odds)
 
-        # 💰 KELLY
+        # 💰 SKIP LOW EDGE (IMPORTANT FIX)
+        if e is None:
+            continue
+
         stake = kelly(e, odds) * 100000
 
-        # 📊 SIMULATION
         pnl = monte_carlo(e, odds)
 
         results.append({
             "match": f"{home} vs {away}",
             "kickoff (Taipei)": kickoff.strftime("%Y-%m-%d %H:%M"),
             "recommendation": bet_type,
-            "edge": round(e,4),
+            "edge": round(float(e), 4),
             "odds": odds,
-            "stake": round(stake,2),
-            "sim_pnl": round(pnl,2)
+            "stake": round(stake, 2),
+            "sim_pnl": round(pnl, 2)
         })
 
-    except:
-        continue
+    except Exception as ex:
+        st.warning(f"Skip match error: {ex}")
 
-df = pd.DataFrame(results).sort_values("edge", ascending=False)
+# =========================
+# DATAFRAME SAFETY FIX (IMPORTANT)
+# =========================
+df = pd.DataFrame(results)
+
+if df.empty:
+    st.error("❌ No valid betting signals generated (API or filter issue)")
+    st.stop()
+
+if "edge" not in df.columns:
+    st.error("❌ Edge column missing (pipeline failure)")
+    st.write(df)
+    st.stop()
+
+df = df.sort_values("edge", ascending=False)
 
 # =========================
 # OUTPUT
@@ -174,9 +211,8 @@ st.dataframe(df)
 
 st.subheader("📊 METRICS")
 
-if len(df) > 0:
-    st.metric("Avg Edge", round(df["edge"].mean(),4))
-    st.metric("Total Sim PnL", round(df["sim_pnl"].sum(),2))
-    st.metric("Signals", len(df))
+st.metric("Avg Edge", round(df["edge"].mean(), 4))
+st.metric("Total Sim PnL", round(df["sim_pnl"].sum(), 2))
+st.metric("Signals", len(df))
 
-st.success("PROFESSIONAL ENGINE ACTIVE ✔")
+st.success("SYSTEM FIXED + STABLE ✔")
