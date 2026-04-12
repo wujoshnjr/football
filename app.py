@@ -2,75 +2,82 @@ import streamlit as st
 import requests
 import numpy as np
 import pandas as pd
-from datetime import datetime
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
-st.set_page_config(page_title="Hedge Fund v30 Execution + CLV + Arb", layout="wide")
-
-# =========================
-# 💰 BANKROLL
-# =========================
-if "bankroll" not in st.session_state:
-    st.session_state.bankroll = 1000
+st.set_page_config(page_title="Hedge Fund v33 Data Warehouse", layout="wide")
 
 # =========================
-# 📡 CORE APIs (FIXED)
+# 📡 CORE APIS (LOCKED)
 # =========================
 ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
 SPORTMONKS_KEY = "Rd1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 NEWS_API_KEY = "aca30b5c29cb379c1d38cc4be8514a64df8d124831e2f07f55714cc2a02ce176"
 
 # =========================
-# 🗄️ CLV DATABASE
+# 🗄️ DATA WAREHOUSE
 # =========================
-conn = sqlite3.connect("clv_v30.db", check_same_thread=False)
+conn = sqlite3.connect("hf_v33.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
-CREATE TABLE IF NOT EXISTS trades (
-    time TEXT,
+CREATE TABLE IF NOT EXISTS matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     match TEXT,
+    time TEXT,
     pick TEXT,
-    entry_odds REAL,
-    close_odds REAL,
-    clv REAL,
-    ev REAL,
-    stake REAL,
-    pnl REAL
+    odds REAL,
+    prob REAL,
+    ev REAL
 )
 """)
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS simulations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match TEXT,
+    win_rate REAL,
+    avg_return REAL,
+    volatility REAL
+)
+""")
+
 conn.commit()
 
 # =========================
-# 📡 MOCK ODDS API
+# 🕒 TIME SYSTEM
+# =========================
+def to_taipei(utc_str):
+    try:
+        dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
+        return dt + timedelta(hours=8)
+    except:
+        return None
+
+def within_24h(dt):
+    now = datetime.now(timezone.utc)
+    return 0 <= (dt - now).total_seconds() <= 86400
+
+# =========================
+# 📡 DATA FETCH
 # =========================
 def get_matches():
-    teams = ["Arsenal", "Chelsea", "Liverpool", "Man City", "Man United", "Spurs"]
-
-    matches = []
-
-    for _ in range(10):
-        home = np.random.choice(teams)
-        away = np.random.choice([t for t in teams if t != home])
-
-        matches.append({
-            "home_team": home,
-            "away_team": away,
-            "bookmakers": [{
-                "markets": [{
-                    "key": "h2h",
-                    "outcomes": [
-                        {"name": home, "price": round(np.random.uniform(1.4, 3.8), 2)},
-                        {"name": away, "price": round(np.random.uniform(1.4, 3.8), 2)}
-                    ]
-                }]
-            }]
-        })
-
-    return matches
+    url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "uk",
+        "markets": "h2h",
+        "oddsFormat": "decimal"
+    }
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except:
+        return []
 
 # =========================
-# 🧠 FEATURE ENGINE (3 APIs LOGIC)
+# 🧠 MODEL ENGINE
 # =========================
 def strength(team):
     return 0.3 + (abs(hash(team)) % 1000) / 2000
@@ -78,20 +85,6 @@ def strength(team):
 def xg(team):
     return 1.0 + (abs(hash(team + "xg")) % 100) / 100
 
-def news(team):
-    return (abs(hash(team + "news")) % 100) / 100
-
-# =========================
-# 📊 MARKET PROB
-# =========================
-def market_prob(odds):
-    inv = {k: 1/v for k, v in odds.items()}
-    s = sum(inv.values())
-    return {k: v/s for k, v in inv.items()}
-
-# =========================
-# 💰 MODELS
-# =========================
 def ev(p, odds):
     return p * odds - 1
 
@@ -100,51 +93,35 @@ def kelly(p, odds):
     return max(0, (b*p - (1-p)) / b)
 
 # =========================
-# 📉 CLV ENGINE
+# 🧪 20,000 SIMULATION ENGINE (NEW)
 # =========================
-def simulate_close(entry_odds):
-    noise = np.random.normal(0, 0.04)
-    return max(1.01, entry_odds * (1 + noise))
+def monte_carlo_20000(p, odds):
 
-def clv(entry, close):
-    return (close - entry) / entry
+    results = []
 
-# =========================
-# ⚖️ ARBITRAGE ENGINE
-# =========================
-def detect_arb(odds_dict):
-    inv = {k: 1/v for k, v in odds_dict.items()}
-    s = sum(inv.values())
+    for _ in range(20000):
 
-    if s < 1:
-        return True, 1 - s  # arb profit margin
-    return False, 0
+        win = np.random.rand() < p
 
-# =========================
-# 🧠 MODEL
-# =========================
-def model(home, away, odds_h, odds_a):
+        if win:
+            results.append(odds - 1)
+        else:
+            results.append(-1)
 
-    sh = strength(home)
-    sa = strength(away)
+    results = np.array(results)
 
-    xh = xg(home)
-    xa = xg(away)
-
-    p_home = (sh + xh) / (sh + sa + xh + xa)
-    p_away = 1 - p_home
-
-    if ev(p_home, odds_h) > ev(p_away, odds_a):
-        return home, p_home, odds_h
-    else:
-        return away, p_away, odds_a
+    return {
+        "win_rate": np.mean(results > 0),
+        "avg_return": np.mean(results),
+        "volatility": np.std(results)
+    }
 
 # =========================
 # 🖥 UI
 # =========================
-st.title("🏦 v30 Execution + CLV + Arbitrage Engine")
+st.title("🏦 v33 Hedge Fund Data Warehouse + 20K Simulation")
 
-if st.button("🚀 RUN FUND ENGINE"):
+if st.button("🚀 RUN DATA WAREHOUSE ENGINE"):
 
     matches = get_matches()
     results = []
@@ -154,6 +131,16 @@ if st.button("🚀 RUN FUND ENGINE"):
         try:
             home = m["home_team"]
             away = m["away_team"]
+
+            # =========================
+            # 🕒 24H FILTER
+            # =========================
+            dt = datetime.fromisoformat(m["commence_time"].replace("Z", "+00:00"))
+            if not within_24h(dt):
+                continue
+
+            taipei_time = to_taipei(m["commence_time"])
+            taipei_str = taipei_time.strftime("%Y-%m-%d %H:%M")
 
             odds = {}
 
@@ -167,61 +154,74 @@ if st.button("🚀 RUN FUND ENGINE"):
                 continue
 
             # =========================
-            # 🧠 SIGNAL
+            # MODEL
             # =========================
-            pick, p, entry_odds = model(home, away, odds[home], odds[away])
+            sh = strength(home)
+            sa = strength(away)
 
-            ev_val = ev(p, entry_odds)
-            k = kelly(p, entry_odds)
-            stake = min(k * st.session_state.bankroll, st.session_state.bankroll * 0.05)
+            xh = xg(home)
+            xa = xg(away)
 
-            # =========================
-            # 📉 CLV
-            # =========================
-            close_odds = simulate_close(entry_odds)
-            clv_val = clv(entry_odds, close_odds)
+            p_home = (sh + xh) / (sh + sa + xh + xa)
 
-            # =========================
-            # ⚖️ ARBITRAGE CHECK
-            # =========================
-            arb_flag, arb_profit = detect_arb(odds)
+            if ev(p_home, odds[home]) > ev(1 - p_home, odds[away]):
+                pick = home
+                p = p_home
+                entry = odds[home]
+            else:
+                pick = away
+                p = 1 - p_home
+                entry = odds[away]
 
-            # =========================
-            # 💰 SIM PnL
-            # =========================
-            win = np.random.rand() < p
-            pnl = stake * (entry_odds - 1) if win else -stake
-            st.session_state.bankroll += pnl
+            ev_v = ev(p, entry)
+            k = kelly(p, entry)
 
             # =========================
-            # 🗄️ STORE
+            # 🧪 20K SIMULATION
+            # =========================
+            sim = monte_carlo_20000(p, entry)
+
+            # =========================
+            # STORE MATCH
             # =========================
             c.execute("""
-                INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO matches (match, time, pick, odds, prob, ev)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
-                str(datetime.now()),
                 f"{home} vs {away}",
+                taipei_str,
                 pick,
-                entry_odds,
-                close_odds,
-                clv_val,
-                ev_val,
-                stake,
-                pnl
+                entry,
+                p,
+                ev_v
             ))
+
+            # =========================
+            # STORE SIMULATION
+            # =========================
+            c.execute("""
+                INSERT INTO simulations (match, win_rate, avg_return, volatility)
+                VALUES (?, ?, ?, ?)
+            """, (
+                f"{home} vs {away}",
+                sim["win_rate"],
+                sim["avg_return"],
+                sim["volatility"]
+            ))
+
             conn.commit()
 
             results.append({
                 "Match": f"{home} vs {away}",
+                "Time (Taipei)": taipei_str,
                 "Pick": pick,
-                "Entry Odds": entry_odds,
-                "Close Odds": close_odds,
-                "CLV": round(clv_val, 4),
-                "EV": round(ev_val, 3),
-                "Stake": round(stake, 2),
-                "PnL": round(pnl, 2),
-                "ARB": arb_flag,
-                "ARB Profit": round(arb_profit, 4)
+                "Odds": entry,
+                "Prob": round(p, 3),
+                "EV": round(ev_v, 3),
+                "Kelly": round(k, 3),
+                "Sim Win Rate (20k)": round(sim["win_rate"], 3),
+                "Sim Avg Return": round(sim["avg_return"], 3),
+                "Sim Volatility": round(sim["volatility"], 3)
             })
 
         except:
@@ -230,24 +230,19 @@ if st.button("🚀 RUN FUND ENGINE"):
     df = pd.DataFrame(results)
 
     if df.empty:
-        st.warning("⚠️ No signal detected")
+        st.warning("⚠️ No data in 24h window")
         st.stop()
 
-    df = df.sort_values("CLV", ascending=False)
+    df = df.sort_values("EV", ascending=False)
 
-    st.success(f"💰 Bankroll: {round(st.session_state.bankroll, 2)}")
+    st.success(f"💰 Matches: {len(df)} | Simulation runs: 20,000 per match")
 
     st.dataframe(df, use_container_width=True)
 
-    # =========================
-    # 📊 SUMMARY
-    # =========================
-    st.subheader("📊 Execution Report")
+    st.subheader("📊 System Summary")
 
     st.write({
-        "Trades": len(df),
-        "Avg CLV": df["CLV"].mean(),
         "Avg EV": df["EV"].mean(),
-        "Arbitrage Opportunities": int(df["ARB"].sum()),
-        "Total PnL": df["PnL"].sum()
+        "Avg Win Rate (Sim)": df["Sim Win Rate (20k)"].mean(),
+        "Avg Volatility": df["Sim Volatility"].mean()
     })
