@@ -1,4 +1,8 @@
-streamlit
+aiohttp
 numpy
 pandas
-requests
+scipy
+plotly
+streamlit
+pytz
+python-dotenv
