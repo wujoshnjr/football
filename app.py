@@ -7,7 +7,7 @@ import pandas as _pd
 from collections import Counter
 
 # =========================
-# TIME
+# TIME SYSTEM
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -73,16 +73,11 @@ def fetch_all():
     return out
 
 # =========================
-# STRENGTH (更真實波動)
+# MODEL
 # =========================
 def strength():
-    base = 1.2 + np.random.normal(0, 0.25)
-    form = np.random.beta(2, 2)
-    return max(0.2, base * (0.7 + form))
+    return max(0.2, 1.2 + np.random.normal(0, 0.25))
 
-# =========================
-# SCORE MODEL（修正爆冷分布）
-# =========================
 def simulate(lh, la):
 
     home = draw = away = 0
@@ -90,11 +85,9 @@ def simulate(lh, la):
 
     for _ in range(SIMS):
 
-        # 🔥 variance injection（修正比分集中問題）
-        hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.4)))
-        ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.4)))
+        hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.35)))
+        ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.35)))
 
-        # ⚡ upset shock
         if np.random.rand() < 0.03:
             hg, ag = ag, hg
 
@@ -113,12 +106,7 @@ def simulate(lh, la):
     def fmt(s, c):
         return f"{s[0]}-{s[1]} ({round(c/total*100,1)}%)"
 
-    return (
-        home/total,
-        draw/total,
-        away/total,
-        [fmt(*x) for x in top]
-    )
+    return home/total, draw/total, away/total, [fmt(*x) for x in top]
 
 # =========================
 # EV / KELLY
@@ -131,16 +119,16 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
-# ⚠️ RISK ENGINE（新增）
+# RISK ENGINE
 # =========================
-def risk_score(ev, draw_prob, odds_home, odds_away):
+def risk_score(ev, draw, oh, oa):
 
     score = 0
 
-    if draw_prob > 0.28:
+    if draw > 0.28:
         score += 30
 
-    if min(odds_home, odds_away) < 1.6:
+    if min(oh, oa) < 1.6:
         score += 25
 
     if ev < 0:
@@ -161,10 +149,14 @@ def risk_label(score):
 # =========================
 # APP
 # =========================
-st.title("🏦 v8 TRADING SYSTEM (FULL RISK + SCORE + EV)")
+st.title("🏦 v9 TRADING DESK SYSTEM")
 
 data = fetch_all()
+cards = []
 
+# =========================
+# BUILD CARDS
+# =========================
 for m in data:
 
     try:
@@ -173,7 +165,11 @@ for m in data:
 
         k = to_taipei(m.get("commence_time"))
 
-        if not k or not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
+        if not k:
+            continue
+
+        # 🕒 24H FILTER
+        if not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
             continue
 
         books = m.get("bookmakers", [])
@@ -201,30 +197,55 @@ for m in data:
 
         pick = max(evs, key=evs.get)
         ev = evs[pick]
-        odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
 
+        odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
         stake = kelly(ev, odds)
 
         risk = risk_score(ev, pd_, oh, oa)
         label = risk_label(risk)
 
-        # ================= UI =================
-        st.markdown("---")
-        st.subheader(f"⚽ {home} vs {away}")
-        st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
+        # 🧠 SORT KEY（核心升級）
+        minutes_to_match = (k - now_taipei()).total_seconds() / 60
 
-        col1, col2, col3, col4 = st.columns(4)
-
-        col1.metric("Pick", pick)
-        col2.metric("EV", round(ev, 3))
-        col3.metric("Risk", risk)
-        col4.metric("Stake", round(stake*100000, 2))
-
-        st.write(f"⚠️ 狀態：{label}")
-
-        st.write("### 📊 比分預測（Top 5）")
-        for s in scores:
-            st.write("•", s)
+        cards.append({
+            "time": k,
+            "minutes": minutes_to_match,
+            "match": f"{home} vs {away}",
+            "pick": pick,
+            "ev": ev,
+            "risk": risk,
+            "label": label,
+            "stake": stake,
+            "scores": scores
+        })
 
     except:
         continue
+
+# =========================
+# 🕒 SORT BY TIME (你要的)
+# =========================
+cards = sorted(cards, key=lambda x: x["minutes"])
+
+# =========================
+# UI (TRADING DESK)
+# =========================
+for c in cards:
+
+    st.markdown("---")
+    st.subheader(f"⚽ {c['match']}")
+
+    st.write(f"🕒 開賽：{c['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"⏳ 距離：{int(c['minutes'])} 分鐘")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("Pick", c["pick"])
+    col2.metric("EV", round(c["ev"], 3))
+    col3.metric("Risk", c["risk"])
+
+    st.write(f"⚠️ 狀態：{c['label']}")
+
+    st.write("### 📊 比分預測（Top 5）")
+    for s in c["scores"]:
+        st.write("•", s)
