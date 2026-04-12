@@ -1,100 +1,68 @@
 import streamlit as st
 import numpy as np
 import requests
+import pandas as pd
 import datetime as dt
 from zoneinfo import ZoneInfo
-import pandas as pd
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-# =========================
-# TIME FILTER (24H ONLY)
-# =========================
-def now_taipei():
+SPORTS = [
+    "soccer_epl","soccer_spain_la_liga","soccer_italy_serie_a",
+    "soccer_germany_bundesliga","soccer_france_ligue_one",
+    "soccer_netherlands_eredivisie","soccer_usa_mls",
+    "soccer_brazil_serie_a","soccer_japan_j_league"
+]
+
+def now():
     return dt.datetime.now(TAIPEI)
 
-def to_taipei(ts):
-    try:
-        t = pd.to_datetime(ts)
-        if t.tzinfo is None:
-            t = t.tz_localize("UTC")
-        return t.tz_convert(TAIPEI)
-    except:
-        return None
+def convert(ts):
+    t = pd.to_datetime(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    return t.tz_convert(TAIPEI)
 
-def in_window(k):
-    return now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
+def in_24h(t):
+    n = now()
+    return n <= t <= n + dt.timedelta(hours=24)
 
-# =========================
-# APL-1 MARKET LAYER
-# =========================
-def fetch_odds():
+def fetch():
     key = st.secrets["API_KEYS"]["ODDS_API"]
+    all_data = []
 
-    r = requests.get(
-        "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
-        params={
-            "api_key": key,
-            "regions": "eu",
-            "markets": "h2h",
-            "oddsFormat": "decimal"
-        }
-    )
+    for s in SPORTS:
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{s}/odds",
+                params={"api_key":key,"regions":"eu","markets":"h2h","oddsFormat":"decimal"},
+                timeout=10
+            )
 
-    if r.status_code != 200:
-        return []
+            if r.status_code == 200:
+                for m in r.json():
+                    m["league"] = s
+                    all_data.append(m)
 
-    return r.json()
+        except:
+            continue
 
-# =========================
-# APL-2 SPORTS INTELLIGENCE (SIMULATED HOOK)
-# =========================
-def lineup_risk():
-    return np.random.uniform(-0.03, 0.03)
+    return all_data
 
-# =========================
-# APL-3 HISTORICAL MODEL (WEAK WEIGHT)
-# =========================
-def historical_bias():
-    return np.random.uniform(-0.02, 0.02)
+def market(odds):
+    p = [1/x for x in odds]
+    s = sum(p)
+    p = [x/s for x in p]
+    return p
 
-# =========================
-# MARKET SIGNAL ENGINE (MAIN DRIVER)
-# =========================
-def market_signal(odds):
-    probs = [1/o for o in odds]
-    s = sum(probs)
-    probs = [p/s for p in probs]
-    return max(probs) - np.mean(probs), probs
+def ev(p, odds):
+    return (p * odds) - 1
 
-# =========================
-# SHARP MONEY DETECTION
-# =========================
-def sharp_money(signal, odds):
-    movement = max(odds) - min(odds)
-    return movement > 0.4 and signal > 0.05
+st.title("🏦 v28 INSTITUTIONAL SPORTSBOOK SYSTEM")
 
-# =========================
-# EXECUTION FILTER
-# =========================
-def should_execute(ev, signal):
-    return ev > 0.03 and signal > 0.045
+data = fetch()
 
-# =========================
-# EV CALC
-# =========================
-def EV(p, odds):
-    return (p * (odds - 1)) - (1 - p)
-
-# =========================
-# APP
-# =========================
-st.title("🏦 v25 PROFESSIONAL SPORTSBOOK HEDGE FUND")
-
-data = fetch_odds()
-
-matches = []
-execs = []
+results = []
 
 for m in data:
 
@@ -102,80 +70,40 @@ for m in data:
         home = m["home_team"]
         away = m["away_team"]
 
-        k = to_taipei(m["commence_time"])
-        if not k or not in_window(k):
+        t = convert(m["commence_time"])
+        if not in_24h(t):
             continue
 
-        outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
-        odds = [o["price"] for o in outcomes]
+        odds = [o["price"] for o in m["bookmakers"][0]["markets"][0]["outcomes"]]
 
-        signal, probs = market_signal(odds)
+        probs = market(odds)
 
-        lineup = lineup_risk()
-        hist = historical_bias()
-
-        final_signal = signal + lineup + hist
-
-        pick = ["HOME", "DRAW", "AWAY"][int(np.argmax(probs))]
-
-        evs = {
-            "HOME": EV(probs[0], odds[0]),
-            "DRAW": EV(probs[1], odds[1]),
-            "AWAY": EV(probs[2], odds[2])
+        pred_score = {
+            "HOME": (2,1),
+            "DRAW": (1,1),
+            "AWAY": (1,2)
         }
 
-        ev = evs[pick]
+        pick = ["HOME","DRAW","AWAY"][np.argmax(probs)]
 
-        matches.append({
+        results.append({
             "match": f"{away} vs {home}",
-            "time": k,
-            "signal": final_signal,
+            "time": t,
+            "league": m["league"],
             "pick": pick,
-            "ev": ev,
-            "odds": odds,
-            "sharp": sharp_money(final_signal, odds)
+            "score": pred_score[pick],
+            "prob": probs
         })
-
-        if should_execute(ev, final_signal):
-            execs.append({
-                "match": f"{away} vs {home}",
-                "pick": pick,
-                "ev": ev,
-                "signal": final_signal
-            })
 
     except:
         continue
 
-# =========================
-# DISPLAY
-# =========================
-st.subheader("🌍 ALL MATCHES (24H WINDOW)")
+st.subheader("🌍 GLOBAL MATCHES (24H TAIPEI)")
 
-for m in sorted(matches, key=lambda x: x["time"]):
+for r in sorted(results, key=lambda x: x["time"]):
 
-    st.markdown("━━━━━━━━━━━━━━━━━━")
-    st.write(f"⚽ {m['match']}")
-    st.write(f"🕒 {m['time'].strftime('%Y-%m-%d %H:%M')}")
-    st.write(f"📡 Signal: {round(m['signal'],4)}")
-    st.write(f"🎯 Pick: {m['pick']}")
-    st.write(f"💰 EV: {round(m['ev'],3)}")
-
-    if m["sharp"]:
-        st.error("🚨 SHARP MONEY DETECTED")
-
-# =========================
-# EXECUTION SIGNALS
-# =========================
-st.subheader("💰 EXECUTION TRADES")
-
-if not execs:
-    st.info("No executable trades")
-
-for e in execs:
-
-    st.error("🚨 EXECUTE ORDER")
-    st.write(f"⚽ {e['match']}")
-    st.write(f"🎯 {e['pick']}")
-    st.write(f"📡 Signal: {round(e['signal'],4)}")
-    st.write(f"💰 EV: {round(e['ev'],3)}")
+    st.write("━━━━━━━━━━━━━━")
+    st.write(r["match"])
+    st.write(r["time"].strftime("%Y-%m-%d %H:%M"))
+    st.write("Pick:", r["pick"])
+    st.write("Score:", r["score"])
