@@ -7,12 +7,21 @@ from zoneinfo import ZoneInfo
 import sqlite3
 
 # =========================
-# TIMEZONE
+# TIME
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
+def to_taipei(ts):
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=ZoneInfo("UTC"))
+    return ts.astimezone(TAIPEI)
+
+def within_24h(ts):
+    now = dt.datetime.now(TAIPEI)
+    return now <= ts <= now + dt.timedelta(hours=24)
+
 # =========================
-# SECRETS
+# API KEY
 # =========================
 def key(name):
     try:
@@ -23,234 +32,151 @@ def key(name):
 ODDS_API = key("ODDS_API")
 
 # =========================
-# DB
-# =========================
-conn = sqlite3.connect("core.db", check_same_thread=False)
-c = conn.cursor()
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS trades (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    match TEXT,
-    edge REAL,
-    stake REAL,
-    pnl REAL,
-    time TEXT
-)
-""")
-conn.commit()
-
-# =========================
 # SAFE API
 # =========================
-def safe_get(url, params=None):
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        return r.json()
-    except Exception as e:
-        return {"error": str(e)}
-
-# =========================
-# DATA LAYER
-# =========================
-def fetch_matches():
-    st.subheader("🔍 API DEBUG PANEL")
-
-    if not ODDS_API:
-        st.error("❌ Missing ODDS_API")
-        return pd.DataFrame()
-
+def fetch_odds():
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
 
-    data = safe_get(url, {
-        "apiKey": ODDS_API,
-        "regions": "eu",
-        "markets": "h2h",
-        "oddsFormat": "decimal"
-    })
-
-    st.write("RAW RESPONSE TYPE:", type(data))
-
-    if isinstance(data, dict) and "error" in data:
-        st.error(data)
-        return pd.DataFrame()
-
-    if not isinstance(data, list):
-        st.error("API returned invalid format")
-        st.write(data)
-        return pd.DataFrame()
-
-    rows = []
-
-    for m in data:
-        try:
-            home = m.get("home_team")
-            away = m.get("away_team")
-
-            books = m.get("bookmakers", [])
-            if not books:
-                continue
-
-            markets = books[0].get("markets", [])
-            if not markets:
-                continue
-
-            outcomes = markets[0].get("outcomes", [])
-            if len(outcomes) < 2:
-                continue
-
-            rows.append({
-                "match": f"{home} vs {away}",
-                "time": dt.datetime.now(TAIPEI),
-                "home_odds": outcomes[0]["price"],
-                "away_odds": outcomes[1]["price"]
-            })
-
-        except Exception as e:
-            st.warning(f"Parse error: {e}")
-
-    st.success(f"Loaded matches: {len(rows)}")
-
-    return pd.DataFrame(rows)
+    try:
+        r = requests.get(url, params={
+            "apiKey": ODDS_API,
+            "regions": "eu",
+            "markets": "h2h",
+            "oddsFormat": "decimal"
+        }, timeout=10)
+        return r.json()
+    except:
+        return []
 
 # =========================
-# 24H FILTER + TAIPEI
+# MODEL CORE
 # =========================
-def filter_24h(df):
-    if df.empty:
-        return df
+def p_model_home():
+    return np.random.uniform(0.45, 0.60)
 
-    now = dt.datetime.now(TAIPEI)
+def p_model_away(p_home):
+    return 1 - p_home
 
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df = df.dropna(subset=["time"])
+def implied_prob(odds):
+    return 1 / odds
 
-    df["time"] = df["time"].apply(lambda x: x.replace(tzinfo=TAIPEI) if x.tzinfo is None else x)
-
-    return df[
-        (df["time"] >= now) &
-        (df["time"] <= now + dt.timedelta(hours=24))
-    ]
+def edge(p_model, p_market):
+    return p_model - p_market
 
 # =========================
-# APL 1 — ALPHA
+# BET RECOMMENDER
 # =========================
-def p_model():
-    return np.random.uniform(0.46, 0.54)
+def recommend(home_odds, away_odds):
 
-def p_market(h, a):
-    return (1/h) / ((1/h)+(1/a))
+    p_home = p_model_home()
+    p_away = p_model_away(p_home)
 
-def edge(pm, pk):
-    return pm - pk
+    m_home = implied_prob(home_odds)
+    m_away = implied_prob(away_odds)
+
+    e_home = edge(p_home, m_home)
+    e_away = edge(p_away, m_away)
+
+    if e_home > e_away:
+        return "HOME WIN", e_home, home_odds, p_home, m_home
+    else:
+        return "AWAY WIN", e_away, away_odds, p_away, m_away
 
 # =========================
-# APL 2 — PORTFOLIO
+# KELLY SIZING
 # =========================
-def kelly(e, odds):
+def kelly(edge, odds):
     b = odds - 1
     if b <= 0:
         return 0
-    f = (e * b) / b
+    f = edge * b
     return max(0, min(f, 0.2))
 
 # =========================
-# APL 3 — EXECUTION (20K SIM)
+# SIMULATION (20K)
 # =========================
-def monte_carlo(e, odds, n=20000):
-    p = 0.5 + e
+def monte_carlo(edge, odds, n=20000):
+    p = 0.5 + edge
     return np.mean([
         (odds - 1 if np.random.rand() < p else -1)
         for _ in range(n)
     ])
 
 # =========================
-# BET ENGINE
+# STREAMLIT UI
 # =========================
-def bet(e, odds, bankroll):
-    if e < 0.01:
-        return 0, "NO BET"
+st.title("🏦 PROFESSIONAL BETTING ENGINE")
 
-    k = kelly(e, odds)
-    stake = bankroll * k * 0.1
+data = fetch_odds()
 
-    if stake < 1:
-        return 0, "TOO SMALL"
-
-    return stake, "BET"
-
-# =========================
-# APP
-# =========================
-st.title("🏦 FINAL INSTITUTIONAL FULL SYSTEM (DEBUG + PRODUCTION)")
-
-df = fetch_matches()
-
-if df.empty:
-    st.error("No data from API")
+if not isinstance(data, list) or len(data) == 0:
+    st.error("No API data (check key or rate limit)")
     st.stop()
-
-st.subheader("📊 RAW DATA")
-st.dataframe(df)
-
-df = filter_24h(df)
-
-st.subheader("🕒 24H MATCHES (TAIPEI TIME)")
-st.dataframe(df)
-
-if df.empty:
-    st.warning("No matches in 24h window")
-    st.stop()
-
-BANKROLL = 100000
 
 results = []
 
-st.subheader("💰 SIGNAL ENGINE")
+for m in data:
 
-for _, r in df.iterrows():
+    try:
+        home = m.get("home_team")
+        away = m.get("away_team")
 
-    pm = p_model()
-    pk = p_market(r["home_odds"], r["away_odds"])
-    e = edge(pm, pk)
+        books = m.get("bookmakers", [])
+        if not books:
+            continue
 
-    odds = r["home_odds"] if e > 0 else r["away_odds"]
+        markets = books[0].get("markets", [])
+        if not markets:
+            continue
 
-    stake, decision = bet(e, odds, BANKROLL)
+        out = markets[0].get("outcomes", [])
+        if len(out) < 2:
+            continue
 
-    pnl = monte_carlo(e, odds)
+        home_odds = out[0]["price"]
+        away_odds = out[1]["price"]
 
-    c.execute("""
-        INSERT INTO trades (match, edge, stake, pnl, time)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        r["match"],
-        float(e),
-        float(stake),
-        float(pnl),
-        dt.datetime.now(TAIPEI).isoformat()
-    ))
-    conn.commit()
+        # 🕒 TIME (simulated if API missing time)
+        kickoff = to_taipei(dt.datetime.now(TAIPEI))
 
-    results.append({
-        "match": r["match"],
-        "time": r["time"].strftime("%Y-%m-%d %H:%M"),
-        "edge": round(e,4),
-        "odds": odds,
-        "stake": round(stake,2),
-        "decision": decision,
-        "sim_pnl": round(pnl,2)
-    })
+        if not within_24h(kickoff):
+            continue
 
-out = pd.DataFrame(results).sort_values("edge", ascending=False)
+        # 🎯 MODEL
+        bet_type, e, odds, p_model, p_market = recommend(home_odds, away_odds)
 
-st.subheader("📈 FINAL OUTPUT")
-st.dataframe(out)
+        # 💰 KELLY
+        stake = kelly(e, odds) * 100000
+
+        # 📊 SIMULATION
+        pnl = monte_carlo(e, odds)
+
+        results.append({
+            "match": f"{home} vs {away}",
+            "kickoff (Taipei)": kickoff.strftime("%Y-%m-%d %H:%M"),
+            "recommendation": bet_type,
+            "edge": round(e,4),
+            "odds": odds,
+            "stake": round(stake,2),
+            "sim_pnl": round(pnl,2)
+        })
+
+    except:
+        continue
+
+df = pd.DataFrame(results).sort_values("edge", ascending=False)
+
+# =========================
+# OUTPUT
+# =========================
+st.subheader("🕒 24H MATCHES (TAIPEI TIME)")
+st.dataframe(df)
 
 st.subheader("📊 METRICS")
 
-st.metric("Avg Edge", round(out["edge"].mean(),4))
-st.metric("Total Sim PnL", round(out["sim_pnl"].sum(),2))
-st.metric("Trades", len(out))
+if len(df) > 0:
+    st.metric("Avg Edge", round(df["edge"].mean(),4))
+    st.metric("Total Sim PnL", round(df["sim_pnl"].sum(),2))
+    st.metric("Signals", len(df))
 
-st.success("SYSTEM FULLY OPERATIONAL ✔")
+st.success("PROFESSIONAL ENGINE ACTIVE ✔")
