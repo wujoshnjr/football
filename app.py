@@ -8,53 +8,25 @@ from zoneinfo import ZoneInfo
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# CONFIG
-# =========================
-LEAGUES = [
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_italy_serie_a",
-    "soccer_germany_bundesliga",
-    "soccer_france_ligue_one",
-    "soccer_usa_mls"
-]
-
-# =========================
 # TIME
 # =========================
 def now():
     return dt.datetime.now(TAIPEI)
 
 def to_taipei(ts):
-    try:
-        t = pd.to_datetime(ts)
-        if t.tzinfo is None:
-            t = t.tz_localize("UTC")
-        return t.tz_convert(TAIPEI)
-    except:
-        return None
+    t = pd.to_datetime(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    return t.tz_convert(TAIPEI)
 
 def in_24h(t):
-    n = now()
-    return n <= t <= n + dt.timedelta(hours=24)
+    return now() <= t <= now() + dt.timedelta(hours=24)
 
 # =========================
-# SAFE VALUE GETTER (🔥核心修復)
+# FETCH ODDS
 # =========================
-def safe_get_match(m):
-
-    return {
-        "home": m.get("home_team") or m.get("home") or "UNKNOWN",
-        "away": m.get("away_team") or m.get("away") or "UNKNOWN",
-        "time": m.get("commence_time") or m.get("time"),
-        "bookmakers": m.get("bookmakers", [])
-    }
-
-# =========================
-# ODDS API
-# =========================
-def fetch_odds():
-    key = st.secrets["API_KEYS"].get("ODDS_API")
+def get_odds():
+    key = st.secrets["API_KEYS"]["ODDS_API"]
 
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
 
@@ -67,59 +39,38 @@ def fetch_odds():
     if r.status_code != 200:
         return []
 
-    try:
-        return r.json()
-    except:
-        return []
+    return r.json()
 
 # =========================
-# FALLBACK (SAFE)
+# NORMALIZE
 # =========================
-def fallback_data():
-    return [{
-        "home": "DEMO HOME",
-        "away": "DEMO AWAY",
-        "time": "2026-04-12T18:00:00Z",
-        "bookmakers": [{
-            "markets": [{
-                "outcomes": [
-                    {"price": 2.1},
-                    {"price": 3.2},
-                    {"price": 3.5}
-                ]
-            }]
-        }]
-    }]
-
-# =========================
-# MERGE ENGINE (FINAL FIXED)
-# =========================
-def merge_matches(data):
+def normalize(data):
 
     matches = []
 
-    for raw in data:
+    for m in data:
 
-        m = safe_get_match(raw)
+        home = m.get("home_team")
+        away = m.get("away_team")
+        time = m.get("commence_time")
 
-        if not m["home"] or not m["away"]:
+        if not home or not away:
             continue
 
-        kickoff = to_taipei(m["time"])
-        if not kickoff:
-            continue
+        kickoff = to_taipei(time)
 
         if not in_24h(kickoff):
             continue
 
         try:
-            odds = m["bookmakers"][0]["markets"][0]["outcomes"]
+            outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
+            odds = [o["price"] for o in outcomes]
         except:
             continue
 
         matches.append({
-            "home": m["home"],
-            "away": m["away"],
+            "home": home,
+            "away": away,
             "time": kickoff,
             "odds": odds
         })
@@ -127,57 +78,118 @@ def merge_matches(data):
     return matches
 
 # =========================
-# MODEL
+# MARKET PROB
 # =========================
-def probs(odds):
-    try:
-        p = [1/o["price"] for o in odds]
-        s = sum(p)
-        return [x/s for x in p]
-    except:
-        return [0.33, 0.33, 0.34]
+def market_prob(odds):
+    inv = [1/o for o in odds]
+    s = sum(inv)
+    return [x/s for x in inv]
 
-def pick(p):
-    return ["HOME", "DRAW", "AWAY"][int(np.argmax(p))]
+# =========================
+# MODEL ADJUSTMENTS
+# =========================
+def model_adjust(mp):
 
-def score(p):
-    if p == "HOME":
-        return (2,1)
-    if p == "AWAY":
-        return (1,2)
-    return (1,1)
+    # 不過度相信市場
+    noise = np.random.normal(0, 0.05, 3)
+
+    # 爆冷因子
+    upset = np.random.uniform(-0.1, 0.1)
+
+    p = [
+        mp[0] + noise[0] + upset,
+        mp[1] + noise[1],
+        mp[2] + noise[2] - upset
+    ]
+
+    p = np.clip(p, 0.01, 0.98)
+    s = sum(p)
+    return [x/s for x in p]
+
+# =========================
+# MONTE CARLO 100000
+# =========================
+def simulate(probs, n=100000):
+
+    outcomes = np.random.choice([0,1,2], size=n, p=probs)
+
+    counts = np.bincount(outcomes, minlength=3)
+
+    return counts / n
+
+# =========================
+# EV
+# =========================
+def ev(prob, odds):
+    return prob * odds - 1
+
+# =========================
+# TRAP DETECTION（關鍵）
+# =========================
+def trap_flag(model_p, market_p):
+
+    diff_home = model_p[0] - market_p[0]
+    diff_away = model_p[2] - market_p[2]
+
+    # 市場明顯偏一邊但模型不支持
+    if market_p[0] > 0.6 and model_p[0] < 0.5:
+        return "⚠️ HOME TRAP"
+
+    if market_p[2] > 0.6 and model_p[2] < 0.5:
+        return "⚠️ AWAY TRAP"
+
+    # 偏差過大
+    if abs(diff_home) > 0.15 or abs(diff_away) > 0.15:
+        return "⚠️ SUSPICIOUS"
+
+    return "OK"
 
 # =========================
 # APP
 # =========================
-st.title("🏦 FINAL GLOBAL FOOTBALL ENGINE (STABLE)")
+st.title("🏦 QUANT HEDGE FUND ENGINE v2")
 
-odds_raw = fetch_odds()
+data = get_odds()
 
-# 🔥 CRITICAL: SAFE FALLBACK
-if not odds_raw:
-    st.warning("⚠️ ODDS API EMPTY → USING FALLBACK")
-    odds_raw = fallback_data()
+matches = normalize(data)
 
-matches = merge_matches(odds_raw)
-
-st.write("📊 MATCHES:", len(matches))
-
-# 🔥 NO MORE SILENT FAIL
-if len(matches) == 0:
-    st.error("❌ NO MATCHES AFTER PROCESSING (check time filter or API)")
+if not matches:
+    st.error("❌ NO MATCHES (CHECK API)")
     st.stop()
 
-# =========================
-# OUTPUT
-# =========================
-for m in sorted(matches, key=lambda x: x["time"]):
+# 排序（台北時間最近在上）
+matches = sorted(matches, key=lambda x: x["time"])
 
-    p = probs(m["odds"])
-    pk = pick(p)
+for m in matches:
 
-    st.markdown("---")
-    st.write(f"⚽ {m['away']} vs {m['home']}")
-    st.write(f"🕒 {m['time']}")
-    st.write(f"🎯 PICK: {pk}")
-    st.write(f"⚽ SCORE: {score(pk)}")
+    mp = market_prob(m["odds"])
+
+    adj = model_adjust(mp)
+
+    sim = simulate(adj)
+
+    evs = [
+        ev(sim[0], m["odds"][0]),
+        ev(sim[1], m["odds"][1]),
+        ev(sim[2], m["odds"][2])
+    ]
+
+    pick_idx = int(np.argmax(evs))
+    pick = ["HOME", "DRAW", "AWAY"][pick_idx]
+
+    trap = trap_flag(sim, mp)
+
+    st.markdown("----")
+
+    st.markdown(f"### ⚽ {m['away']} vs {m['home']}")
+
+    st.write(f"🕒 Taipei Time: {m['time']}")
+
+    st.write("📊 Market Prob:", [round(x,3) for x in mp])
+    st.write("🤖 Model Prob:", [round(x,3) for x in sim])
+
+    st.write("💰 EV:", [round(x,3) for x in evs])
+
+    st.write(f"🎯 PICK: {pick}")
+
+    st.write(f"🚨 Trap Analysis: {trap}")
