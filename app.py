@@ -3,12 +3,10 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
-
-# ✅ 強制乾淨 pandas（避免 pd 被污染）
 import pandas as _pd
 
 # =========================
-# TIME（永遠保留）
+# TIME
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -46,31 +44,31 @@ def fetch_all():
     try:
         key = st.secrets["API_KEYS"]["ODDS_API"]
     except:
-        st.error("❌ Missing API KEY")
         return []
 
     all_data = []
 
     for s in SPORTS:
-        url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
-
         try:
-            r = requests.get(url, params={
-                "api_key": key,
-                "regions": "eu",
-                "markets": "h2h",
-                "oddsFormat": "decimal"
-            }, timeout=10)
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{s}/odds",
+                params={
+                    "api_key": key,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal"
+                },
+                timeout=10
+            )
 
             if r.status_code != 200:
                 continue
 
-            data = r.json()
-
-            if isinstance(data, list):
-                for d in data:
-                    d["league"] = s
-                all_data.extend(data)
+            d = r.json()
+            if isinstance(d, list):
+                for i in d:
+                    i["league"] = s
+                all_data.extend(d)
 
         except:
             continue
@@ -78,7 +76,7 @@ def fetch_all():
     return all_data
 
 # =========================
-# FORM + HISTORY
+# FORM / STRENGTH
 # =========================
 def form():
     return np.clip(np.random.normal(0.5, 0.2), 0.1, 0.9)
@@ -96,31 +94,14 @@ def strength():
     return max(0.2, lh), max(0.2, la)
 
 # =========================
-# UPSET
-# =========================
-def upset_factor(oh, od, oa):
-    try:
-        avg = (oh + od + oa) / 3
-        fav = min(oh, oa)
-        return min(0.25, (avg / fav - 1) * 0.2)
-    except:
-        return 0.1
-
-# =========================
 # MONTE CARLO
 # =========================
-def simulate(lh, la, upset):
-
+def simulate(lh, la):
     h = d = a = 0
 
     for _ in range(SIMS):
-
         hg = np.random.poisson(lh)
         ag = np.random.poisson(la)
-
-        # 💣 爆冷
-        if np.random.rand() < upset:
-            hg, ag = ag, hg
 
         if hg > ag:
             h += 1
@@ -129,28 +110,71 @@ def simulate(lh, la, upset):
         else:
             a += 1
 
-    total = SIMS
-    return h/total, d/total, a/total
+    return h/SIMS, d/SIMS, a/SIMS
 
 # =========================
-# EV + KELLY
+# EV / KELLY
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
 
 def kelly(ev, odds):
     b = odds - 1
-    if b <= 0:
-        return 0
-    return max(0, min(ev / b, 0.25))
+    return max(0, min(ev / b, 0.25)) if b > 0 else 0
+
+# =========================
+# 💣 REAL UPSET MODEL（核心）
+# =========================
+def upset_score(ph, p_draw, pa, oh, oa):
+
+    score = 0
+
+    fav_odds = min(oh, oa)
+
+    # 1️⃣ 熱門過熱
+    if fav_odds < 1.6:
+        score += 0.25
+
+    # 2️⃣ 平局壓力
+    if p_draw > 0.27:
+        score += 0.2
+
+    # 3️⃣ 模型 vs 市場偏差
+    implied_home = 1 / oh
+    if abs(ph - implied_home) > 0.15:
+        score += 0.2
+
+    # 4️⃣ 客隊爆冷條件
+    if pa > 0.30 and oa > 2.8:
+        score += 0.25
+
+    return min(score, 1)
+
+# =========================
+# 分類
+# =========================
+def classify(ev, upset, p_draw):
+
+    if upset > 0.5:
+        return "🔴 STRONG UPSET", "高機率爆冷"
+
+    if upset > 0.3:
+        return "🟠 UPSET", "存在爆冷條件"
+
+    if ev > 0.05:
+        return "🟡 VALUE", "模型優勢"
+
+    if p_draw > 0.28:
+        return "⚪ DRAW HEAVY", "平局機率高"
+
+    return "🟢 NORMAL", "正常盤"
 
 # =========================
 # APP
 # =========================
-st.title("🏦 FINAL FOOTBALL AI（ZERO-CRASH VERSION）")
+st.title("🏦 REAL UPSET INTELLIGENCE v6")
 
 data = fetch_all()
-
 results = []
 
 for m in data:
@@ -161,7 +185,6 @@ for m in data:
 
         k = to_taipei(m.get("commence_time"))
 
-        # 🕒 24小時（保留）
         if not k or not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
             continue
 
@@ -169,11 +192,7 @@ for m in data:
         if not books:
             continue
 
-        markets = books[0].get("markets", [])
-        if not markets:
-            continue
-
-        outs = markets[0].get("outcomes", [])
+        outs = books[0]["markets"][0]["outcomes"]
         if len(outs) < 3:
             continue
 
@@ -181,58 +200,43 @@ for m in data:
         od = float(outs[1]["price"])
         oa = float(outs[2]["price"])
 
-        # MODEL
         lh, la = strength()
-        upset = upset_factor(oh, od, oa)
-
-        ph, pd_, pa = simulate(lh, la, upset)
+        ph, p_draw, pa = simulate(lh, la)
 
         evs = {
             "HOME": EV(ph, oh),
-            "DRAW": EV(pd_, od),
+            "DRAW": EV(p_draw, od),
             "AWAY": EV(pa, oa)
         }
 
         pick = max(evs, key=evs.get)
         ev = evs[pick]
-
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
+
         stake = kelly(ev, odds) * 100000
 
+        upset = upset_score(ph, p_draw, pa, oh, oa)
+        label, reason = classify(ev, upset, p_draw)
+
         results.append({
-            "league": m.get("league"),
             "match": f"{home} vs {away}",
-            "kickoff (Taipei)": k.strftime("%Y-%m-%d %H:%M"),
+            "kickoff": k.strftime("%Y-%m-%d %H:%M"),
             "pick": pick,
+            "type": label,
+            "reason": reason,
             "EV": round(ev, 4),
             "odds": odds,
             "stake": round(stake, 2),
-            "UPSET": round(upset, 3)
+            "UPSET_SCORE": round(upset, 2)
         })
 
-    except Exception as e:
+    except:
         continue
-
-# =========================
-# SAFE DATAFRAME（關鍵修復）
-# =========================
-if not isinstance(results, list):
-    results = []
 
 df = _pd.DataFrame.from_records(results)
 
-# =========================
-# OUTPUT
-# =========================
 if df.empty:
-    st.warning("⚠️ 24小時內沒有比賽或API沒有資料")
+    st.warning("沒有比賽")
 else:
     df = df.sort_values("EV", ascending=False)
-
-    st.subheader("🕒 台北時間 24h 比賽")
     st.dataframe(df)
-
-    st.metric("場數", len(df))
-    st.metric("平均EV", round(df["EV"].mean(), 4))
-
-st.success("✅ SYSTEM STABLE（不會再炸）")
