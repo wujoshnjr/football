@@ -8,14 +8,14 @@ from zoneinfo import ZoneInfo
 import random
 
 # =========================
-# TIMEZONE (CLOUD SAFE)
+# TIMEZONE
 # =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# SAFE SECRETS LOADER
+# SECRETS
 # =========================
-def get_key(name: str):
+def get_key(name):
     try:
         return st.secrets["API_KEYS"].get(name)
     except:
@@ -26,9 +26,9 @@ SPORTMONKS = get_key("SPORTMONKS")
 NEWS_API = get_key("NEWS_API")
 
 # =========================
-# API HEALTH CHECK
+# API STATUS
 # =========================
-def api_health():
+def api_status():
     return {
         "ODDS API": "🟢" if ODDS_API else "🔴",
         "SPORTMONKS": "🟡" if SPORTMONKS else "🔴",
@@ -36,29 +36,15 @@ def api_health():
     }
 
 # =========================
-# COUNTRY MAP
+# DB
 # =========================
-COUNTRY_MAP = {
-    "epl": "🇬🇧 England",
-    "laliga": "🇪🇸 Spain",
-    "bundesliga": "🇩🇪 Germany",
-    "seriea": "🇮🇹 Italy",
-    "ligue1": "🇫🇷 France",
-    "jleague": "🇯🇵 Japan",
-    "mls": "🇺🇸 USA"
-}
-
-# =========================
-# DATABASE
-# =========================
-conn = sqlite3.connect("cloud_ultra.db", check_same_thread=False)
+conn = sqlite3.connect("ultra_fixed.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
 CREATE TABLE IF NOT EXISTS trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match TEXT,
-    country TEXT,
     pick TEXT,
     odds REAL,
     edge REAL,
@@ -71,14 +57,34 @@ CREATE TABLE IF NOT EXISTS trades (
 conn.commit()
 
 # =========================
-# DATA LAYER (SAFE + 24H ONLY)
+# SAFE FETCH MATCHES (FIXED)
 # =========================
 def fetch_matches():
+
     if not ODDS_API:
         return pd.DataFrame()
 
     try:
-        url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
+        # 1️⃣ GET SPORT LIST
+        sports_url = "https://api.the-odds-api.com/v4/sports"
+        sports = requests.get(
+            sports_url,
+            params={"apiKey": ODDS_API},
+            timeout=10
+        ).json()
+
+        sport_key = None
+        for s in sports:
+            if "soccer" in s.get("key", ""):
+                sport_key = s["key"]
+                break
+
+        if not sport_key:
+            st.error("No soccer sport_key found")
+            return pd.DataFrame()
+
+        # 2️⃣ GET ODDS
+        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
 
         r = requests.get(url, params={
             "apiKey": ODDS_API,
@@ -87,35 +93,38 @@ def fetch_matches():
             "oddsFormat": "decimal"
         }, timeout=10)
 
-        if r.status_code != 200:
+        # 🔍 DEBUG (IMPORTANT)
+        st.write("API STATUS:", r.status_code)
+
+        try:
+            data = r.json()
+        except:
+            st.error("Invalid JSON from API")
             return pd.DataFrame()
 
-        data = r.json()
+        if not isinstance(data, list):
+            st.write("RAW RESPONSE:", data)
+            return pd.DataFrame()
 
         rows = []
-
-        now = dt.datetime.now(dt.timezone.utc)
 
         for m in data:
             try:
                 home = m["home_team"]
                 away = m["away_team"]
 
-                odds = m["bookmakers"][0]["markets"][0]["outcomes"]
+                bookmakers = m.get("bookmakers", [])
+                if not bookmakers:
+                    continue
 
-                league = m.get("sport_key", "unknown")
-                country = COUNTRY_MAP.get(league, "🌍 Unknown")
-
-                # ⚡ fake filter (24h placeholder safe mode)
-                match_time = now
+                outcomes = bookmakers[0]["markets"][0]["outcomes"]
 
                 rows.append({
                     "match": f"{home} vs {away}",
-                    "country": country,
-                    "home_odds": odds[0]["price"],
-                    "away_odds": odds[1]["price"],
-                    "time": match_time,
-                    "taipei": match_time.astimezone(TAIPEI)
+                    "home_odds": outcomes[0]["price"],
+                    "away_odds": outcomes[1]["price"],
+                    "time": dt.datetime.now(dt.timezone.utc),
+                    "taipei": dt.datetime.now(dt.timezone.utc).astimezone(TAIPEI)
                 })
 
             except:
@@ -123,11 +132,12 @@ def fetch_matches():
 
         return pd.DataFrame(rows)
 
-    except:
+    except Exception as e:
+        st.error(f"Fetch error: {e}")
         return pd.DataFrame()
 
 # =========================
-# MODEL ENGINE
+# MODEL
 # =========================
 def p_model():
     return np.random.uniform(0.45, 0.55)
@@ -142,7 +152,7 @@ def edge(pm, pk):
     return pm - pk
 
 # =========================
-# CLV ENGINE
+# CLV
 # =========================
 def clv(open_odds, close_odds):
     try:
@@ -151,7 +161,7 @@ def clv(open_odds, close_odds):
         return 0
 
 # =========================
-# KELLY (RISK CONTROL)
+# KELLY
 # =========================
 def kelly(e, odds):
     if odds is None:
@@ -164,16 +174,12 @@ def kelly(e, odds):
     return max(0, min(f, 0.25))
 
 # =========================
-# MONTE CARLO 20,000
+# MONTE CARLO (20K)
 # =========================
 def monte_carlo(e, odds, n=20000):
     if odds is None:
         return 0
-
     p = 0.5 + e
-    if p <= 0:
-        return 0
-
     return np.mean([
         (odds - 1 if random.random() < p else -1)
         for _ in range(n)
@@ -182,15 +188,15 @@ def monte_carlo(e, odds, n=20000):
 # =========================
 # APP
 # =========================
-st.title("🏦🔐 vCLOUD-HARDENED ULTRA")
+st.title("🏦🔐 vCLOUD FIXED ULTRA FINAL")
 
-st.subheader("🔌 API Health Status")
-st.write(api_health())
+st.subheader("API STATUS")
+st.write(api_status())
 
 df = fetch_matches()
 
 if df.empty:
-    st.warning("No data available (API missing or blocked)")
+    st.warning("No data returned from API (check key or rate limit)")
     st.stop()
 
 results = []
@@ -205,19 +211,16 @@ for _, r in df.iterrows():
     odds = r["home_odds"] if pick == "home" else r["away_odds"]
 
     stake = kelly(e, odds) * 10000
-
     sim = monte_carlo(e, odds)
 
     clv_value = clv(odds, odds * np.random.uniform(0.95, 1.05))
-
     pnl = stake * sim
 
     c.execute("""
-        INSERT INTO trades (match, country, pick, odds, edge, clv, sim, pnl, time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trades (match, pick, odds, edge, clv, sim, pnl, time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         r["match"],
-        r["country"],
         pick,
         odds,
         e,
@@ -230,35 +233,24 @@ for _, r in df.iterrows():
 
     results.append({
         "Match": r["match"],
-        "Country": r["country"],
         "Pick": pick,
         "Odds": odds,
         "Edge": round(e,4),
         "CLV": round(clv_value,4),
         "Stake": round(stake,2),
-        "Sim (20k)": round(sim,4),
         "PnL": round(pnl,2),
-        "Time (Taipei)": r["taipei"]
+        "Time": r["taipei"]
     })
 
 res = pd.DataFrame(results).sort_values("Edge", ascending=False)
 
-# =========================
-# DASHBOARD
-# =========================
-st.subheader("📊 Institutional Signals (24H + Taipei)")
+st.subheader("📊 Signals")
 st.dataframe(res)
 
-st.subheader("💰 Portfolio Metrics")
+st.subheader("💰 Metrics")
 st.metric("Total PnL", round(res["PnL"].sum(),2))
 st.metric("Avg Edge", round(res["Edge"].mean(),4))
 st.metric("Avg CLV", round(res["CLV"].mean(),4))
 
-st.subheader("🌍 Country Exposure")
-st.dataframe(res.groupby("Country")["PnL"].sum())
-
-st.subheader("🧠 System Status")
-st.write("✔ Cloud Hardened Mode")
-st.write("✔ Zero pytz dependency")
-st.write("✔ Fail-safe API layer")
-st.write("✔ Monte Carlo 20,000 runs")
+st.subheader("🌍 Exposure")
+st.write("Matches loaded:", len(res))
