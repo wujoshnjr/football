@@ -8,38 +8,74 @@ from zoneinfo import ZoneInfo
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
+# GLOBAL LEAGUES
+# =========================
+SPORTS = [
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "soccer_france_ligue_one",
+    "soccer_usa_mls"
+]
+
+# =========================
 # TIME
 # =========================
 def now():
     return dt.datetime.now(TAIPEI)
 
 def to_taipei(ts):
-    t = pd.to_datetime(ts)
-    if t.tzinfo is None:
-        t = t.tz_localize("UTC")
-    return t.tz_convert(TAIPEI)
+    try:
+        t = pd.to_datetime(ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return t.tz_convert(TAIPEI)
+    except:
+        return None
 
 def in_24h(t):
     return now() <= t <= now() + dt.timedelta(hours=24)
 
 # =========================
-# FETCH ODDS
+# FETCH GLOBAL ODDS
 # =========================
-def get_odds():
+def fetch_all_odds():
+
     key = st.secrets["API_KEYS"]["ODDS_API"]
+    all_matches = []
 
-    url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
+    for sport in SPORTS:
 
-    r = requests.get(url, params={
-        "api_key": key,
-        "regions": "eu",
-        "markets": "h2h"
-    })
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
 
-    if r.status_code != 200:
-        return []
+        r = requests.get(url, params={
+            "api_key": key,
+            "regions": "eu",
+            "markets": "h2h"
+        })
 
-    return r.json()
+        if r.status_code != 200:
+            continue
+
+        try:
+            data = r.json()
+            all_matches.extend(data)
+        except:
+            continue
+
+    return all_matches
+
+# =========================
+# FALLBACK（多場）
+# =========================
+def fallback():
+
+    return [
+        {"home":"Team A","away":"Team B","time":"2026-04-12T18:00:00Z","odds":[2.1,3.2,3.5]},
+        {"home":"Team C","away":"Team D","time":"2026-04-12T20:00:00Z","odds":[1.9,3.4,4.0]},
+        {"home":"Team E","away":"Team F","time":"2026-04-13T01:00:00Z","odds":[2.5,3.1,2.8]}
+    ]
 
 # =========================
 # NORMALIZE
@@ -50,14 +86,16 @@ def normalize(data):
 
     for m in data:
 
-        home = m.get("home_team")
-        away = m.get("away_team")
-        time = m.get("commence_time")
+        home = m.get("home_team") or m.get("home")
+        away = m.get("away_team") or m.get("away")
+        time = m.get("commence_time") or m.get("time")
 
         if not home or not away:
             continue
 
         kickoff = to_taipei(time)
+        if not kickoff:
+            continue
 
         if not in_24h(kickoff):
             continue
@@ -66,6 +104,9 @@ def normalize(data):
             outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
             odds = [o["price"] for o in outcomes]
         except:
+            odds = m.get("odds")
+
+        if not odds:
             continue
 
         matches.append({
@@ -78,23 +119,16 @@ def normalize(data):
     return matches
 
 # =========================
-# MARKET PROB
+# MODEL
 # =========================
 def market_prob(odds):
     inv = [1/o for o in odds]
     s = sum(inv)
     return [x/s for x in inv]
 
-# =========================
-# MODEL ADJUSTMENTS
-# =========================
-def model_adjust(mp):
-
-    # 不過度相信市場
-    noise = np.random.normal(0, 0.05, 3)
-
-    # 爆冷因子
-    upset = np.random.uniform(-0.1, 0.1)
+def adjust(mp):
+    noise = np.random.normal(0,0.05,3)
+    upset = np.random.uniform(-0.1,0.1)
 
     p = [
         mp[0] + noise[0] + upset,
@@ -102,70 +136,52 @@ def model_adjust(mp):
         mp[2] + noise[2] - upset
     ]
 
-    p = np.clip(p, 0.01, 0.98)
+    p = np.clip(p,0.01,0.98)
     s = sum(p)
     return [x/s for x in p]
 
-# =========================
-# MONTE CARLO 100000
-# =========================
-def simulate(probs, n=100000):
+def simulate(p, n=100000):
+    res = np.random.choice([0,1,2], size=n, p=p)
+    return np.bincount(res, minlength=3)/n
 
-    outcomes = np.random.choice([0,1,2], size=n, p=probs)
-
-    counts = np.bincount(outcomes, minlength=3)
-
-    return counts / n
-
-# =========================
-# EV
-# =========================
 def ev(prob, odds):
     return prob * odds - 1
 
-# =========================
-# TRAP DETECTION（關鍵）
-# =========================
-def trap_flag(model_p, market_p):
+def trap(model_p, market_p):
 
-    diff_home = model_p[0] - market_p[0]
-    diff_away = model_p[2] - market_p[2]
-
-    # 市場明顯偏一邊但模型不支持
     if market_p[0] > 0.6 and model_p[0] < 0.5:
-        return "⚠️ HOME TRAP"
+        return "⚠️ 主隊陷阱盤"
 
     if market_p[2] > 0.6 and model_p[2] < 0.5:
-        return "⚠️ AWAY TRAP"
+        return "⚠️ 客隊陷阱盤"
 
-    # 偏差過大
-    if abs(diff_home) > 0.15 or abs(diff_away) > 0.15:
-        return "⚠️ SUSPICIOUS"
+    if abs(model_p[0]-market_p[0]) > 0.15:
+        return "⚠️ 異常盤"
 
-    return "OK"
+    return "正常"
 
 # =========================
 # APP
 # =========================
-st.title("🏦 QUANT HEDGE FUND ENGINE v2")
+st.title("🏦 QUANT HEDGE FUND v3 (GLOBAL)")
 
-data = get_odds()
+raw = fetch_all_odds()
 
-matches = normalize(data)
+matches = normalize(raw)
 
 if not matches:
-    st.error("❌ NO MATCHES (CHECK API)")
-    st.stop()
+    st.warning("⚠️ 使用備援資料")
+    matches = normalize(fallback())
 
-# 排序（台北時間最近在上）
+st.write("📊 比賽數量:", len(matches))
+
+# 排序（台北時間）
 matches = sorted(matches, key=lambda x: x["time"])
 
 for m in matches:
 
     mp = market_prob(m["odds"])
-
-    adj = model_adjust(mp)
-
+    adj = adjust(mp)
     sim = simulate(adj)
 
     evs = [
@@ -174,22 +190,20 @@ for m in matches:
         ev(sim[2], m["odds"][2])
     ]
 
-    pick_idx = int(np.argmax(evs))
-    pick = ["HOME", "DRAW", "AWAY"][pick_idx]
-
-    trap = trap_flag(sim, mp)
+    pick_i = int(np.argmax(evs))
+    pick = ["主隊","平局","客隊"][pick_i]
 
     st.markdown("----")
 
-    st.markdown(f"### ⚽ {m['away']} vs {m['home']}")
+    st.markdown(f"### ⚽ {m['away']}（客） vs {m['home']}（主）")
 
-    st.write(f"🕒 Taipei Time: {m['time']}")
+    st.write("🕒 台北時間:", m["time"])
 
-    st.write("📊 Market Prob:", [round(x,3) for x in mp])
-    st.write("🤖 Model Prob:", [round(x,3) for x in sim])
+    st.write("📊 市場機率:", [round(x,3) for x in mp])
+    st.write("🤖 模型機率:", [round(x,3) for x in sim])
 
     st.write("💰 EV:", [round(x,3) for x in evs])
 
-    st.write(f"🎯 PICK: {pick}")
+    st.write(f"🎯 推薦: {pick}")
 
-    st.write(f"🚨 Trap Analysis: {trap}")
+    st.write("🚨 盤口分析:", trap(sim, mp))
