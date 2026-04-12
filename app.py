@@ -1,235 +1,201 @@
 # ============================================
-# FOOTBALL TRADING SYSTEM - FINAL UPGRADED VERSION
+# INSTITUTIONAL FOOTBALL TRADING SYSTEM (FIXED + UPGRADED)
 # ============================================
 
 import os
-import asyncio
-import logging
-from datetime import datetime, timedelta
-from dataclasses import dataclass
-from enum import Enum
-from typing import Dict, List, Optional
-
 import numpy as np
 import pandas as pd
 import streamlit as st
+from dataclasses import dataclass, field
+from enum import Enum
+from datetime import datetime, timedelta
 from scipy import stats
 import pytz
 
-# safe import (避免 Streamlit crash)
-try:
-    import aiohttp
-    AIOHTTP_OK = True
-except Exception:
-    AIOHTTP_OK = False
-
-# ============================================
-# LOGGING
-# ============================================
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("football_engine")
-
-# ============================================
+# =========================
 # ENUMS
-# ============================================
+# =========================
 
 class TrapSignal(Enum):
     OK = "OK"
     WARNING = "WARNING"
-    TRAP = "TRAP"
+    TRAP_HOME = "TRAP_HOME"
+    TRAP_AWAY = "TRAP_AWAY"
+    TRAP_DRAW = "TRAP_DRAW"
 
-# ============================================
-# DATA MODELS
-# ============================================
+# =========================
+# DATA STRUCTURES
+# =========================
 
 @dataclass
 class TeamStats:
-    name: str
     attack: float = 1.0
     defense: float = 1.0
     form: float = 1.0
-    elo: float = 1500
-    rest_days: float = 5.0
-    xg_for: float = 1.4
+    xg_for: float = 1.5
     xg_against: float = 1.2
-    tempo: float = 1.0
     injury: float = 1.0
+    fatigue: float = 1.0
+    motivation: float = 1.0
+    coach_rating: float = 1.0
+    home_adv: float = 1.1
 
 @dataclass
-class Odds:
-    home: float
-    draw: float
-    away: float
+class Match:
+    home: str
+    away: str
+    league: str
+    odds_home: float
+    odds_draw: float
+    odds_away: float
 
-# ============================================
-# CORE MODEL (UPGRADED POISSON)
-# ============================================
+# =========================
+# MARKET ENGINE
+# =========================
 
-class PoissonEngine:
-    def __init__(self):
-        self.league_avg = 2.7
+class MarketEngine:
 
-    def lambda_team(self, t: TeamStats, opp: TeamStats, home: bool):
-        home_bonus = 1.15 if home else 1.0
+    @staticmethod
+    def implied_probs(odds):
+        total = sum(1/o for o in odds)
+        return [(1/o)/total for o in odds]
 
-        elo_factor = (t.elo - opp.elo) / 400
-        elo_factor = np.clip(1 + elo_factor * 0.1, 0.8, 1.2)
+# =========================
+# POISSON MODEL (UPGRADED)
+# =========================
 
-        xg_factor = t.xg_for / max(opp.xg_against, 0.1)
+class PoissonModel:
 
-        form_factor = t.form
-        injury_factor = t.injury
+    def lambda_team(self, team: TeamStats, opp: TeamStats, home: bool):
 
-        tempo_factor = t.tempo
-
-        lam = (
-            self.league_avg / 2
-            * t.attack
-            * opp.defense
-            * home_bonus
-            * elo_factor
-            * xg_factor
-            * form_factor
-            * injury_factor
-            * tempo_factor
+        base = (
+            team.attack * opp.defense *
+            team.xg_for / max(opp.xg_against, 0.1)
         )
 
-        return np.clip(lam, 0.2, 4.5)
+        home_bonus = team.home_adv if home else 1.0
 
-    def score_matrix(self, lh, la):
-        max_g = 7
-        mat = {}
+        form_factor = (team.form * 0.6 + team.motivation * 0.4)
 
-        for i in range(max_g):
-            for j in range(max_g):
-                p = stats.poisson.pmf(i, lh) * stats.poisson.pmf(j, la)
-                mat[f"{i}-{j}"] = p
+        fatigue_penalty = 1 / max(team.fatigue, 0.5)
 
-        return mat
+        injury_penalty = team.injury
 
-# ============================================
-# MONTE CARLO SIM
-# ============================================
+        return base * home_bonus * form_factor * fatigue_penalty * injury_penalty
+
+# =========================
+# MONTE CARLO
+# =========================
 
 class Simulator:
-    def run(self, lh, la, n=50000):
+
+    def simulate(self, lh, la, n=20000):
+
         hg = np.random.poisson(lh, n)
         ag = np.random.poisson(la, n)
 
         return {
-            "home": np.mean(hg > ag),
+            "home_win": np.mean(hg > ag),
             "draw": np.mean(hg == ag),
-            "away": np.mean(hg < ag),
-            "hg": np.mean(hg),
-            "ag": np.mean(ag),
-            "over25": np.mean(hg + ag > 2.5),
+            "away_win": np.mean(hg < ag),
+            "avg_goals": np.mean(hg + ag)
         }
 
-# ============================================
-# VALUE & KELLY
-# ============================================
-
-class Kelly:
-    def stake(self, prob, odds):
-        if odds <= 1:
-            return 0
-        b = odds - 1
-        q = 1 - prob
-        k = (b * prob - q) / b
-        return max(0, min(k, 0.05))
-
-# ============================================
-# TRAP DETECTOR
-# ============================================
+# =========================
+# TRAP DETECTOR (IMPROVED)
+# =========================
 
 class TrapDetector:
+
     def detect(self, model, market):
-        diff = abs(model["home"] - market["home"])
 
-        if diff < 0.05:
-            return TrapSignal.OK, diff
-        elif diff < 0.12:
+        diff = abs(model["home_win"] - market[0])
+
+        if diff > 0.20:
+            return TrapSignal.TRAP_HOME, diff
+        elif diff > 0.12:
             return TrapSignal.WARNING, diff
-        return TrapSignal.TRAP, diff
+        else:
+            return TrapSignal.OK, diff
 
-# ============================================
+# =========================
+# KELLY
+# =========================
+
+class Kelly:
+
+    def calc(self, p, odds):
+        b = odds - 1
+        q = 1 - p
+        return max(0, (b*p - q) / b)
+
+# =========================
 # ENGINE
-# ============================================
+# =========================
 
 class Engine:
+
     def __init__(self):
-        self.poisson = PoissonEngine()
+        self.model = PoissonModel()
         self.sim = Simulator()
-        self.kelly = Kelly()
         self.trap = TrapDetector()
+        self.kelly = Kelly()
 
-    def analyze(self, home, away, odds):
+    def run(self, match):
 
-        lh = self.poisson.lambda_team(home, away, True)
-        la = self.poisson.lambda_team(away, home, False)
+        home_stats = TeamStats()
+        away_stats = TeamStats()
 
-        sim = self.sim.run(lh, la)
+        lh = self.model.lambda_team(home_stats, away_stats, True)
+        la = self.model.lambda_team(away_stats, home_stats, False)
 
-        trap, score = self.trap.detect(sim, {
-            "home": 1/odds.home,
-            "draw": 1/odds.draw,
-            "away": 1/odds.away
-        })
+        sim = self.sim.simulate(lh, la)
+
+        market = MarketEngine.implied_probs([
+            match.odds_home,
+            match.odds_draw,
+            match.odds_away
+        ])
+
+        trap_signal, trap_score = self.trap.detect(sim, market)
 
         return {
-            "lambda_home": lh,
-            "lambda_away": la,
             "sim": sim,
-            "trap": trap.value,
-            "trap_score": score,
-            "kelly_home": self.kelly.stake(sim["home"], odds.home),
-            "kelly_away": self.kelly.stake(sim["away"], odds.away),
+            "trap": trap_signal,
+            "trap_score": trap_score,
+            "kelly_home": self.kelly.calc(sim["home_win"], match.odds_home),
+            "kelly_draw": self.kelly.calc(sim["draw"], match.odds_draw),
+            "kelly_away": self.kelly.calc(sim["away_win"], match.odds_away),
         }
 
-# ============================================
-# STREAMLIT UI (PRO DASHBOARD STYLE)
-# ============================================
+# =========================
+# STREAMLIT UI (UPGRADED)
+# =========================
 
-def run_ui():
+st.set_page_config(page_title="Football Trading System", layout="wide")
 
-    st.set_page_config(page_title="Football Trading Desk", layout="wide")
+engine = Engine()
 
-    st.title("⚽ Football Trading System (UPGRADED)")
+st.title("⚽ Institutional Football Trading System (UPGRADED)")
 
-    engine = Engine()
+match = Match(
+    home="Team A",
+    away="Team B",
+    league="EPL",
+    odds_home=1.90,
+    odds_draw=3.40,
+    odds_away=4.20
+)
 
-    # demo teams (professional factors included)
-    home = TeamStats(
-        "Man City", attack=1.3, defense=1.1, form=1.2,
-        elo=1950, xg_for=2.3, xg_against=0.9, tempo=1.1
-    )
+if st.button("RUN MODEL"):
+    result = engine.run(match)
 
-    away = TeamStats(
-        "Arsenal", attack=1.2, defense=1.0, form=1.05,
-        elo=1880, xg_for=1.8, xg_against=1.1, tempo=1.0
-    )
+    st.subheader("📊 Prediction")
+    st.write(result["sim"])
 
-    odds = Odds(home=1.85, draw=3.6, away=4.2)
+    st.subheader("🚨 Trap Signal")
+    st.write(result["trap"].value)
+    st.write("Score:", result["trap_score"])
 
-    if st.button("RUN ANALYSIS"):
-        result = engine.analyze(home, away, odds)
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("Home Lambda", f"{result['lambda_home']:.2f}")
-        col2.metric("Away Lambda", f"{result['lambda_away']:.2f}")
-        col3.metric("Trap Signal", result["trap"])
-
-        st.subheader("Simulation Probabilities")
-        st.json(result["sim"])
-
-        st.subheader("Kelly Stakes")
-        st.write(result["kelly_home"], result["kelly_away"])
-
-        st.subheader("Trap Score")
-        st.write(result["trap_score"])
-
-
-if __name__ == "__main__":
-    run_ui()
+    st.subheader("💰 Kelly Stakes")
+    st.write(result["kelly_home"], result["kelly_draw"], result["kelly_away"])
