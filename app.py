@@ -4,26 +4,26 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-st.set_page_config(page_title="Hedge Fund Execution v21", layout="wide")
+st.set_page_config(page_title="Hedge Fund Institutional v22", layout="wide")
 
 # =========================
-# 📡 APIs (固定三件套)
+# 🧠 API KEYS (固定三件套)
 # =========================
 ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
 SPORTMONKS_KEY = "Rd1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 NEWS_API_KEY = "aca30b5c29cb379c1d38cc4be8514a64df8d124831e2f07f55714cc2a02ce176"
 
 # =========================
-# 💰 INITIAL BANKROLL
+# 💰 SESSION STATE (PORTFOLIO)
 # =========================
 if "bankroll" not in st.session_state:
     st.session_state.bankroll = 1000
 
-if "trades" not in st.session_state:
-    st.session_state.trades = []
+if "clv_db" not in st.session_state:
+    st.session_state.clv_db = []
 
 # =========================
-# 📡 ODDS API
+# 📡 ODDS DATA
 # =========================
 def get_matches():
     url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
@@ -33,7 +33,6 @@ def get_matches():
         "markets": "h2h",
         "oddsFormat": "decimal"
     }
-
     try:
         r = requests.get(url, timeout=10)
         return r.json() if isinstance(r.json(), list) else []
@@ -41,22 +40,21 @@ def get_matches():
         return []
 
 # =========================
-# 🧠 AI MODEL (simplified institutional version)
+# 📊 MARKET PROB
+# =========================
+def market_prob(odds):
+    inv = {k: 1/v for k, v in odds.items()}
+    s = sum(inv.values())
+    return {k: v/s for k, v in inv.items()}
+
+# =========================
+# 🧠 AI SCORE (institutional proxy)
 # =========================
 def ai_score(team):
     base = abs(hash(team)) % 1000
     form = np.random.uniform(0.4, 0.6)
     injury = np.random.uniform(0.4, 0.6)
-
     return (base / 2000) * 0.5 + form * 0.3 + (1 - injury) * 0.2
-
-# =========================
-# 📊 MARKET PROB
-# =========================
-def market_prob(odds):
-    inv = {k: 1/v for k,v in odds.items()}
-    s = sum(inv.values())
-    return {k: v/s for k,v in inv.items()}
 
 # =========================
 # 💰 EV / KELLY
@@ -69,42 +67,34 @@ def kelly(p, odds):
     return max(0, (b*p - (1-p)) / b)
 
 # =========================
-# 💰 EXECUTION ENGINE
+# 📉 CLV ENGINE
 # =========================
-def execute_trade(pick, odds, p, bankroll):
-    k = kelly(p, odds)
-    stake = bankroll * min(k, 0.05)
-
-    win = np.random.rand() < p
-
-    pnl = stake * (odds - 1) if win else -stake
-
-    return stake, pnl, win
+def clv(entry, close):
+    return (close - entry) / entry
 
 # =========================
-# 📊 METRICS
+# 📊 MULTI-MARKET SCORE
 # =========================
-def max_drawdown(equity):
-    peak = np.maximum.accumulate(equity)
-    drawdown = equity - peak
-    return drawdown.min()
+def market_score(ev_v, clv_v, edge):
+    return (ev_v * 0.5) + (abs(clv_v) * 0.3) + (abs(edge) * 0.2)
 
-def sharpe(returns):
-    if len(returns) < 2:
-        return 0
-    return np.mean(returns) / (np.std(returns) + 1e-9)
+# =========================
+# 💰 PORTFOLIO LIMIT
+# =========================
+def position_size(kelly_val, bankroll):
+    return min(kelly_val * bankroll, bankroll * 0.05)
 
 # =========================
 # 🖥 UI
 # =========================
-st.title("🏦 Hedge Fund Execution & PnL v21")
+st.title("🏦 Hedge Fund Institutional System v22")
 
-if st.button("🚀 RUN EXECUTION DESK"):
+if st.button("🚀 RUN INSTITUTIONAL SCAN"):
 
     matches = get_matches()
     results = []
-    equity = [st.session_state.bankroll]
-    returns = []
+
+    bankroll = st.session_state.bankroll
 
     for m in matches:
 
@@ -135,39 +125,70 @@ if st.button("🚀 RUN EXECUTION DESK"):
             p_away = 1 - p_home
 
             # =========================
-            # PICK
+            # 📉 MARKET
+            # =========================
+            mkt = market_prob(odds)
+            mkt_h = mkt.get(home, 0.5)
+            mkt_a = mkt.get(away, 0.5)
+
+            # =========================
+            # 💰 VALUE
             # =========================
             ev_h = ev(p_home, h_odds)
             ev_a = ev(p_away, a_odds)
 
             if ev_h > ev_a:
                 pick = home
-                odds_v = h_odds
                 p = p_home
+                odds_v = h_odds
+                ev_v = ev_h
+                mkt_v = mkt_h
+                edge = p_home - mkt_h
             else:
                 pick = away
-                odds_v = a_odds
                 p = p_away
+                odds_v = a_odds
+                ev_v = ev_a
+                mkt_v = mkt_a
+                edge = p_away - mkt_a
 
             # =========================
-            # EXECUTION
+            # 📉 SIMULATED EXECUTION
             # =========================
-            bankroll = st.session_state.bankroll
+            entry_odds = odds_v
+            close_odds = entry_odds * np.random.uniform(0.95, 1.05)
+            clv_v = clv(entry_odds, close_odds)
 
-            stake, pnl, win = execute_trade(pick, odds_v, p, bankroll)
+            # =========================
+            # 💰 POSITION SIZING
+            # =========================
+            k = kelly(p, odds_v)
+            stake = position_size(k, bankroll)
 
+            # =========================
+            # 📊 INSTITUTIONAL SCORE
+            # =========================
+            score = market_score(ev_v, clv_v, edge)
+
+            # =========================
+            # 📊 UPDATE BANKROLL (SIMULATION)
+            # =========================
+            win = np.random.rand() < p
+
+            pnl = stake * (odds_v - 1) if win else -stake
             st.session_state.bankroll += pnl
 
-            equity.append(st.session_state.bankroll)
-            returns.append(pnl)
-
-            st.session_state.trades.append({
+            # =========================
+            # 📊 STORE CLV DATABASE
+            # =========================
+            st.session_state.clv_db.append({
                 "Match": f"{home} vs {away}",
                 "Pick": pick,
-                "Stake": round(stake, 2),
-                "PnL": round(pnl, 2),
-                "Win": win,
-                "Bankroll": round(st.session_state.bankroll, 2)
+                "EV": ev_v,
+                "CLV": clv_v,
+                "Stake": stake,
+                "PnL": pnl,
+                "Bankroll": st.session_state.bankroll
             })
 
             results.append({
@@ -175,8 +196,12 @@ if st.button("🚀 RUN EXECUTION DESK"):
                 "Pick": pick,
                 "Odds": round(odds_v, 2),
                 "Prob": round(p, 3),
-                "EV": round(ev(p, odds_v), 3),
+                "MarketProb": round(mkt_v, 3),
+                "EV": round(ev_v, 3),
+                "Edge": round(edge, 3),
+                "CLV": round(clv_v, 3),
                 "Stake": round(stake, 2),
+                "Score": round(score, 3),
                 "PnL": round(pnl, 2)
             })
 
@@ -185,18 +210,26 @@ if st.button("🚀 RUN EXECUTION DESK"):
 
     df = pd.DataFrame(results)
 
+    df = df.sort_values("Score", ascending=False)
+
     st.success(f"💰 Bankroll: {round(st.session_state.bankroll, 2)}")
 
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df.head(15), use_container_width=True)
 
     # =========================
-    # 📊 PERFORMANCE
+    # 📊 PERFORMANCE DASHBOARD
     # =========================
-    st.subheader("📊 Performance Metrics")
+    st.subheader("📊 Institutional Performance Dashboard")
 
-    st.write({
-        "Max Drawdown": round(max_drawdown(np.array(equity)), 2),
-        "Sharpe": round(sharpe(returns), 3),
-        "Total Trades": len(returns),
-        "Win Rate": round(np.mean([t["Win"] for t in st.session_state.trades]), 3)
-    })
+    clv_df = pd.DataFrame(st.session_state.clv_db)
+
+    if not clv_df.empty:
+        st.write({
+            "Total Trades": len(clv_df),
+            "Avg EV": clv_df["EV"].mean(),
+            "Avg CLV": clv_df["CLV"].mean(),
+            "Total PnL": clv_df["PnL"].sum(),
+            "Final Bankroll": st.session_state.bankroll
+        })
+
+        st.dataframe(clv_df.tail(20), use_container_width=True)
