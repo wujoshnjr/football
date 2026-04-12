@@ -3,29 +3,11 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
-import pandas as _pd
+import pandas as pd
 from collections import Counter
 
-# =========================
-# TIME SYSTEM
-# =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-def now_taipei():
-    return dt.datetime.now(TAIPEI)
-
-def to_taipei(ts):
-    try:
-        t = _pd.to_datetime(ts)
-        if t.tzinfo is None:
-            t = t.tz_localize("UTC")
-        return t.tz_convert(TAIPEI)
-    except:
-        return None
-
-# =========================
-# CONFIG
-# =========================
 SIMS = 20000
 
 SPORTS = [
@@ -39,6 +21,21 @@ SPORTS = [
 ]
 
 # =========================
+# TIME
+# =========================
+def now_taipei():
+    return dt.datetime.now(TAIPEI)
+
+def to_taipei(ts):
+    try:
+        t = pd.to_datetime(ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return t.tz_convert(TAIPEI)
+    except:
+        return None
+
+# =========================
 # FETCH
 # =========================
 def fetch_all():
@@ -49,24 +46,15 @@ def fetch_all():
         try:
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{s}/odds",
-                params={
-                    "api_key": key,
-                    "regions": "eu",
-                    "markets": "h2h",
-                    "oddsFormat": "decimal"
-                },
+                params={"api_key": key, "regions": "eu", "markets": "h2h"},
                 timeout=10
             )
-
-            if r.status_code != 200:
-                continue
-
-            d = r.json()
-            if isinstance(d, list):
-                for i in d:
-                    i["league"] = s
-                out.extend(d)
-
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    for i in data:
+                        i["league"] = s
+                    out.extend(data)
         except:
             continue
 
@@ -76,22 +64,19 @@ def fetch_all():
 # MODEL
 # =========================
 def strength():
-    return max(0.2, 1.2 + np.random.normal(0, 0.25))
+    return max(0.2, 1.2 + np.random.normal(0, 0.3))
 
 def simulate(lh, la):
 
     home = draw = away = 0
-    scores = Counter()
+    score_map = Counter()
 
     for _ in range(SIMS):
 
-        hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.35)))
-        ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.35)))
+        hg = np.random.poisson(max(0.2, lh + np.random.normal(0, 0.4)))
+        ag = np.random.poisson(max(0.2, la + np.random.normal(0, 0.4)))
 
-        if np.random.rand() < 0.03:
-            hg, ag = ag, hg
-
-        scores[(hg, ag)] += 1
+        score_map[(hg, ag)] += 1
 
         if hg > ag:
             home += 1
@@ -101,15 +86,21 @@ def simulate(lh, la):
             away += 1
 
     total = SIMS
-    top = scores.most_common(5)
+
+    top_scores = score_map.most_common(5)
 
     def fmt(s, c):
         return f"{s[0]}-{s[1]} ({round(c/total*100,1)}%)"
 
-    return home/total, draw/total, away/total, [fmt(*x) for x in top]
+    return (
+        home/total,
+        draw/total,
+        away/total,
+        [fmt(*x) for x in top_scores]
+    )
 
 # =========================
-# EV / KELLY
+# EV ENGINE
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
@@ -119,25 +110,31 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
+# 🧠 HEDGE FUND CORE
+# =========================
+def market_prob(odds):
+    return 1 / odds
+
+def consensus_prob(p_model, p_market):
+    return (0.7 * p_model) + (0.3 * p_market)
+
+# =========================
 # RISK ENGINE
 # =========================
-def risk_score(ev, draw, oh, oa):
+def risk(ev, draw, odds_home, odds_away):
 
     score = 0
 
     if draw > 0.28:
-        score += 30
-
-    if min(oh, oa) < 1.6:
         score += 25
-
+    if min(odds_home, odds_away) < 1.6:
+        score += 25
     if ev < 0:
-        score += 30
+        score += 40
 
     return min(score, 100)
 
-def risk_label(score):
-
+def label(score):
     if score > 70:
         return "🔴 DANGEROUS"
     if score > 45:
@@ -149,14 +146,12 @@ def risk_label(score):
 # =========================
 # APP
 # =========================
-st.title("🏦 v9 TRADING DESK SYSTEM")
+st.title("🏦 v10 HEDGE FUND FOOTBALL ENGINE")
 
 data = fetch_all()
+
 cards = []
 
-# =========================
-# BUILD CARDS
-# =========================
 for m in data:
 
     try:
@@ -168,7 +163,6 @@ for m in data:
         if not k:
             continue
 
-        # 🕒 24H FILTER
         if not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
             continue
 
@@ -177,22 +171,25 @@ for m in data:
             continue
 
         outs = books[0]["markets"][0]["outcomes"]
-        if len(outs) < 3:
-            continue
 
-        oh = float(outs[0]["price"])
-        od = float(outs[1]["price"])
-        oa = float(outs[2]["price"])
+        oh, od, oa = float(outs[0]["price"]), float(outs[1]["price"]), float(outs[2]["price"])
 
         lh = strength()
         la = strength()
 
         ph, pd_, pa, scores = simulate(lh, la)
 
+        # =========================
+        # CONSENSUS (交易核心)
+        # =========================
+        p_home = consensus_prob(ph, market_prob(oh))
+        p_draw = consensus_prob(pd_, market_prob(od))
+        p_away = consensus_prob(pa, market_prob(oa))
+
         evs = {
-            "HOME": EV(ph, oh),
-            "DRAW": EV(pd_, od),
-            "AWAY": EV(pa, oa)
+            "HOME": EV(p_home, oh),
+            "DRAW": EV(p_draw, od),
+            "AWAY": EV(p_away, oa)
         }
 
         pick = max(evs, key=evs.get)
@@ -201,21 +198,16 @@ for m in data:
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
         stake = kelly(ev, odds)
 
-        risk = risk_score(ev, pd_, oh, oa)
-        label = risk_label(risk)
-
-        # 🧠 SORT KEY（核心升級）
-        minutes_to_match = (k - now_taipei()).total_seconds() / 60
+        risk = risk(ev, p_draw, oh, oa)
+        tag = label(risk)
 
         cards.append({
             "time": k,
-            "minutes": minutes_to_match,
             "match": f"{home} vs {away}",
             "pick": pick,
             "ev": ev,
             "risk": risk,
-            "label": label,
-            "stake": stake,
+            "tag": tag,
             "scores": scores
         })
 
@@ -223,29 +215,19 @@ for m in data:
         continue
 
 # =========================
-# 🕒 SORT BY TIME (你要的)
+# SORT BY TIME (交易桌)
 # =========================
-cards = sorted(cards, key=lambda x: x["minutes"])
+cards = sorted(cards, key=lambda x: x["time"])
 
-# =========================
-# UI (TRADING DESK)
-# =========================
 for c in cards:
 
     st.markdown("---")
-    st.subheader(f"⚽ {c['match']}")
+    st.subheader(c["match"])
 
-    st.write(f"🕒 開賽：{c['time'].strftime('%Y-%m-%d %H:%M')}")
-    st.write(f"⏳ 距離：{int(c['minutes'])} 分鐘")
+    st.write(f"🕒 {c['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"⚠️ {c['tag']} | Risk {c['risk']}")
+    st.write(f"💰 EV: {round(c['ev'],3)} | Pick: {c['pick']}")
 
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric("Pick", c["pick"])
-    col2.metric("EV", round(c["ev"], 3))
-    col3.metric("Risk", c["risk"])
-
-    st.write(f"⚠️ 狀態：{c['label']}")
-
-    st.write("### 📊 比分預測（Top 5）")
+    st.write("📊 Score distribution:")
     for s in c["scores"]:
         st.write("•", s)
