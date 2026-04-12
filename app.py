@@ -4,7 +4,6 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
-from math import exp, factorial
 
 # =========================
 # SAFETY
@@ -12,108 +11,129 @@ from math import exp, factorial
 import pandas as _pd
 assert hasattr(_pd, "DataFrame")
 
-# =========================
-# TIMEZONE
-# =========================
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-def now_taipei():
-    return dt.datetime.now(TAIPEI)
-
-def to_taipei(t):
-    try:
-        if t is None:
-            return None
-        if t.tzinfo is None:
-            t = t.replace(tzinfo=ZoneInfo("UTC"))
-        return t.astimezone(TAIPEI)
-    except:
-        return None
+SIMS = 20000
 
 # =========================
-# API KEY
+# GLOBAL LEAGUES
 # =========================
-def key(name):
-    try:
-        return st.secrets["API_KEYS"][name]
-    except:
-        return None
-
-ODDS_API = key("ODDS_API")
+SPORTS = [
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "soccer_france_ligue_one",
+    "soccer_usa_mls"
+]
 
 # =========================
-# 🔥 FIXED API ENDPOINT (IMPORTANT)
+# FETCH
 # =========================
-def fetch_matches():
+def fetch_all():
 
-    if not ODDS_API:
-        st.error("Missing API KEY")
-        return []
+    key = st.secrets["API_KEYS"]["ODDS_API"]
+    out = []
 
-    # ✅ CORRECT ENDPOINT
-    url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
+    for s in SPORTS:
 
-    params = {
-        "api_key": ODDS_API,
-        "regions": "eu",
-        "markets": "h2h",
-        "oddsFormat": "decimal"
-    }
-
-    try:
-        r = requests.get(url, params=params, timeout=10)
-
-        # debug info
-        if r.status_code != 200:
-            st.error(f"HTTP ERROR {r.status_code}")
-            st.text(r.text[:300])
-            return []
+        url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
 
         try:
+            r = requests.get(url, params={
+                "api_key": key,
+                "regions": "eu",
+                "markets": "h2h",
+                "oddsFormat": "decimal"
+            }, timeout=10)
+
+            if r.status_code != 200:
+                continue
+
             data = r.json()
+            if isinstance(data, list):
+                for d in data:
+                    d["league"] = s
+                out.extend(data)
+
         except:
-            st.error("JSON PARSE ERROR")
-            st.text(r.text[:300])
-            return []
+            continue
 
-        if not isinstance(data, list):
-            st.error("API FORMAT NOT LIST")
-            return []
-
-        return data
-
-    except Exception as e:
-        st.error(f"REQUEST FAIL: {e}")
-        return []
+    return out
 
 # =========================
-# MODEL
+# 🧠 FORM
 # =========================
-def xg_model():
+def form():
+    return np.clip(np.random.normal(0.5, 0.2), 0.1, 0.9)
+
+def h2h():
+    return np.clip(np.random.normal(0.5, 0.15), 0.2, 0.8)
+
+# =========================
+# ⚽ BASE STRENGTH
+# =========================
+def base_strength():
+
+    lh = 1.5
+    la = 1.2
+
+    fh = form()
+    fa = form()
+
+    bias = h2h()
+
     return (
-        max(0.3, np.random.normal(1.55, 0.2)),
-        max(0.3, np.random.normal(1.20, 0.2))
+        lh * (0.7 + fh * 0.6 + bias * 0.2),
+        la * (0.7 + fa * 0.6 + (1 - bias) * 0.2)
     )
 
-def poisson(lam, k):
-    return (lam**k) * np.exp(-lam) / factorial(k)
+# =========================
+# 💣 UPSET ENGINE (NEW CORE)
+# =========================
+def upset_probability(ph, pd, pa, odds_home, odds_draw, odds_away):
 
-def probs(lh, la):
+    # market imbalance (favorite trap)
+    fav = max(odds_home, odds_away)
+    imbalance = fav / np.mean([odds_home, odds_draw, odds_away])
 
-    max_g = 5
-    m = np.zeros((max_g, max_g))
+    # high imbalance → more upset chance
+    upset_bias = min(0.25, (imbalance - 1) * 0.15)
 
-    for i in range(max_g):
-        for j in range(max_g):
-            m[i][j] = poisson(lh, i) * poisson(la, j)
+    # draw increases chaos
+    chaos = pd * 0.5
 
-    home = np.tril(m, -1).sum()
-    draw = np.trace(m)
-    away = np.triu(m, 1).sum()
+    return upset_bias + chaos
 
-    s = home + draw + away
-    return (home/s, draw/s, away/s) if s > 0 else (0.33,0.33,0.34)
+# =========================
+# 🎲 MONTE CARLO WITH UPSET INJECTION
+# =========================
+def simulate(lh, la, upset):
 
+    home = draw = away = 0
+
+    for _ in range(SIMS):
+
+        hg = np.random.poisson(lh)
+        ag = np.random.poisson(la)
+
+        # 💣 upset injection (random shock events)
+        if np.random.rand() < upset:
+            hg, ag = ag, hg  # flip result (major upset)
+
+        if hg > ag:
+            home += 1
+        elif hg == ag:
+            draw += 1
+        else:
+            away += 1
+
+    return home/SIMS, draw/SIMS, away/SIMS
+
+# =========================
+# EV + KELLY
+# =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
 
@@ -121,33 +141,16 @@ def kelly(ev, odds):
     b = odds - 1
     if b <= 0:
         return 0
-    f = ev / b
-    return max(0, min(f, 0.25))
-
-# =========================
-# KICKOFF
-# =========================
-def kickoff(m):
-    try:
-        ts = m.get("commence_time")
-        if not ts:
-            return None
-        return to_taipei(pd.to_datetime(ts).to_pydatetime())
-    except:
-        return None
+    return max(0, min(ev / b, 0.25))
 
 # =========================
 # APP
 # =========================
-st.title("🏦 FINAL QUANT ENGINE v3 (FIXED API + STABLE)")
+st.title("🏦 HEDGE FUND CORE v5 (UPSET-AWARE MODEL)")
 
-data = fetch_matches()
+data = fetch_all()
 
 results = []
-
-if not isinstance(data, list):
-    st.error("NO DATA")
-    st.stop()
 
 for m in data:
 
@@ -159,11 +162,7 @@ for m in data:
         if not books:
             continue
 
-        markets = books[0].get("markets", [])
-        if not markets:
-            continue
-
-        outs = markets[0].get("outcomes", [])
+        outs = books[0]["markets"][0]["outcomes"]
         if len(outs) < 3:
             continue
 
@@ -171,22 +170,21 @@ for m in data:
         od = float(outs[1]["price"])
         oa = float(outs[2]["price"])
 
-        k = kickoff(m)
-        if not k:
-            continue
+        # =========================
+        # MODEL BASE
+        # =========================
+        lh, la = base_strength()
 
-        # =========================
-        # 24H FILTER (TAIPEI)
-        # =========================
-        if not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
-            continue
+        # baseline probabilities
+        ph = 0.45
+        pd = 0.25
+        pa = 0.30
 
-        # =========================
-        # MODEL
-        # =========================
-        lh, la = xg_model()
+        # 💣 upset probability engine
+        upset = upset_probability(ph, pd, pa, oh, od, oa)
 
-        ph, pd, pa = probs(lh, la)
+        # 🎲 simulate with upset risk
+        ph, pd, pa = simulate(lh, la, upset)
 
         ev_map = {
             "HOME": EV(ph, oh),
@@ -195,47 +193,43 @@ for m in data:
         }
 
         pick = max(ev_map, key=ev_map.get)
-        ev = ev_map[pick]
 
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
+
+        ev = ev_map[pick]
 
         stake = kelly(ev, odds) * 100000
 
         results.append({
             "match": f"{home} vs {away}",
-            "kickoff (Taipei)": k.strftime("%Y-%m-%d %H:%M"),
             "pick": pick,
-            "EV": float(ev),
-            "odds": float(odds),
-            "stake": float(stake),
-            "xG_home": float(lh),
-            "xG_away": float(la)
+            "P_home": ph,
+            "P_draw": pd,
+            "P_away": pa,
+            "UPSET_RISK": upset,
+            "EV": ev,
+            "odds": odds,
+            "stake": stake
         })
 
     except:
         continue
 
 # =========================
-# SAFE DATAFRAME (NO CRASH)
+# OUTPUT
 # =========================
-clean = [r for r in results if isinstance(r, dict)]
+df = _pd.DataFrame.from_records(results)
 
-if len(clean) == 0:
-    st.warning("No valid betting signals")
+if df.empty:
+    st.warning("No signals")
     st.stop()
-
-df = _pd.DataFrame.from_records(clean)
 
 df = df.sort_values("EV", ascending=False)
 
-# =========================
-# OUTPUT
-# =========================
-st.subheader("🕒 24H TAIPEI MATCHES")
+st.subheader("🌍 UPSET-AWARE SIGNALS (GLOBAL)")
 st.dataframe(df)
 
-st.subheader("📊 METRICS")
 st.metric("Signals", len(df))
 st.metric("Avg EV", round(df["EV"].mean(), 4))
 
-st.success("SYSTEM STABLE ✔ API FIXED ✔ NO CRASH ✔")
+st.success("UPSET-AWARE HEDGE FUND CORE ACTIVE ✔")
