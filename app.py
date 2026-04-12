@@ -3,11 +3,21 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
+import pandas as pd
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
+SPORTS = [
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "soccer_france_ligue_one",
+    "soccer_usa_mls"
+]
+
 # =========================
-# TIME SAFE
+# TIME
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -21,46 +31,61 @@ def to_taipei(ts):
     except:
         return None
 
-def in_24h(k):
-    return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
-
 # =========================
-# FETCH (NO FILTER)
+# SAFE FETCH (MULTI LEAGUE FIX)
 # =========================
 def fetch_all():
+
     key = st.secrets["API_KEYS"]["ODDS_API"]
+    all_data = []
 
-    try:
-        r = requests.get(
-            "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
-            params={
-                "api_key": key,
-                "regions": "eu",
-                "markets": "h2h",
-                "oddsFormat": "decimal"
-            },
-            timeout=10
-        )
+    for s in SPORTS:
 
-        if r.status_code != 200:
-            return []
+        try:
+            r = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{s}/odds",
+                params={
+                    "api_key": key,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal"
+                },
+                timeout=10
+            )
 
-        return r.json()
+            if r.status_code == 200:
+                data = r.json()
 
-    except:
-        return []
+                if isinstance(data, list):
+                    all_data.extend(data)
+
+        except:
+            continue
+
+    return all_data
 
 # =========================
-# SAFE MARKET PARSER (FIX)
+# SAFE PARSER (NO DROP)
 # =========================
 def safe_odds(m):
 
     try:
-        outs = m.get("bookmakers", [])[0].get("markets", [])[0].get("outcomes", [])
-        if len(outs) < 3:
+        outs = m.get("bookmakers", [])
+
+        if not outs:
             return None
 
-        return [o["price"] for o in outs]
+        markets = outs[0].get("markets", [])
+
+        if not markets:
+            return None
+
+        outcomes = markets[0].get("outcomes", [])
+
+        if len(outcomes) < 3:
+            return None
+
+        return [o["price"] for o in outcomes]
 
     except:
         return None
@@ -68,17 +93,19 @@ def safe_odds(m):
 # =========================
 # SIGNAL ENGINE
 # =========================
-def signal(odds):
+def signal_engine(odds):
 
     probs = np.array([1/o for o in odds])
     probs = probs / probs.sum()
 
-    return probs, (max(probs) - 0.33) * 3
+    signal = (max(probs) - 0.33) * 3
+
+    return probs, signal
 
 # =========================
 # APP
 # =========================
-st.title("🏦 v25 REAL HEDGE FUND ROBUST SYSTEM (FIXED NO MATCH ISSUE)")
+st.title("🏦 v26 INSTITUTIONAL MULTI-MARKET SYSTEM (FIXED ZERO-DATA ISSUE)")
 
 data = fetch_all()
 
@@ -91,24 +118,21 @@ for m in data:
 
     k = to_taipei(m.get("commence_time"))
 
-    # ❗ NEVER SKIP DISPLAY
     odds = safe_odds(m)
 
     st.markdown("━━━━━━━━━━━━━━━━━━")
     st.subheader(f"{away} vs {home}")
 
-    # TIME (SAFE)
     if k:
         st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
     else:
-        st.write("🕒 台北時間：⚠️ unavailable")
+        st.write("🕒 台北時間：unknown")
 
-    # NO ODDS CASE
     if not odds:
-        st.warning("⚠️ Odds missing → DISPLAY ONLY MODE")
+        st.warning("⚠️ No odds available → DISPLAY ONLY")
         continue
 
-    probs, sig = signal(odds)
+    probs, sig = signal_engine(odds)
 
     st.metric("Signal", round(sig, 4))
 
@@ -120,4 +144,4 @@ for m in data:
 
     shown += 1
 
-st.info(f"Total matches shown: {shown}")
+st.success(f"Total matches shown: {shown}")
