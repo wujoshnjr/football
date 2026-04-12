@@ -3,11 +3,12 @@ import numpy as np
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
+import pandas as pd
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME ENGINE
+# TIME
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -25,14 +26,14 @@ def in_window(k):
     return k and now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# DATA ENGINE (NO EMPTY STATE)
+# DATA (REAL FIRST)
 # =========================
 def fetch_data():
 
     key = st.secrets.get("API_KEYS", {}).get("ODDS_API")
 
     if not key:
-        return fallback_data()
+        return fallback()
 
     try:
         r = requests.get(
@@ -47,78 +48,87 @@ def fetch_data():
         )
 
         if r.status_code != 200:
-            return fallback_data()
+            return fallback()
 
         data = r.json()
 
-        if not data:
-            return fallback_data()
-
-        return data
+        return data if data else fallback()
 
     except:
-        return fallback_data()
+        return fallback()
 
 # =========================
 # FALLBACK (GUARANTEE OUTPUT)
 # =========================
-def fallback_data():
+def fallback():
     return [{
-        "home_team": "Fallback United",
-        "away_team": "Quant FC",
-        "commence_time": (now_taipei() + dt.timedelta(hours=5)).isoformat(),
+        "home_team": "Fallback FC",
+        "away_team": "Quant United",
+        "commence_time": (now_taipei() + dt.timedelta(hours=3)).isoformat(),
         "bookmakers": [{
             "markets": [{
                 "outcomes": [
                     {"price": 2.1},
                     {"price": 3.2},
-                    {"price": 3.4}
+                    {"price": 3.6}
                 ]
             }]
         }]
     }]
 
 # =========================
-# MARKET ENGINE
+# ODDS → PROBABILITY
 # =========================
-def market_signal(odds):
+def probs_from_odds(odds):
 
-    probs = np.array([1/o for o in odds])
-    probs = probs / probs.sum()
-
-    signal = (max(probs) - 0.33) * 3
-
-    return probs, signal
+    p = np.array([1/o for o in odds])
+    return p / p.sum()
 
 # =========================
-# RISK ENGINE (UPSET DETECTION)
+# MONTE CARLO (100K SIMS)
 # =========================
-def upset(signal, probs):
+def monte_carlo(probs):
 
-    vol = np.std(probs)
+    outcomes = ["HOME", "DRAW", "AWAY"]
 
-    return vol * signal
+    sims = np.random.choice(outcomes, size=100000, p=probs)
+
+    return {
+        "HOME": np.mean(sims == "HOME"),
+        "DRAW": np.mean(sims == "DRAW"),
+        "AWAY": np.mean(sims == "AWAY")
+    }
 
 # =========================
-# EXECUTION ENGINE
+# SCORE SIMULATION
 # =========================
-def decision(ev, risk):
+def score_sim(prob):
 
-    if ev > 0.35 and risk < 0.15:
-        return "EXECUTE"
-    elif ev > 0.2:
-        return "WATCH"
-    else:
-        return "NO TRADE"
+    home_lambda = 1.5 + prob[0]
+    away_lambda = 1.2 + prob[2]
+
+    hg = np.random.poisson(home_lambda)
+    ag = np.random.poisson(away_lambda)
+
+    return f"{hg}-{ag}"
+
+# =========================
+# EV ENGINE
+# =========================
+def ev(sim_prob, odds):
+
+    return (sim_prob * odds) - 1
 
 # =========================
 # APP
 # =========================
-st.title("🏦 v30 REAL INSTITUTIONAL TRADING SYSTEM (FINAL CONSOLIDATED VERSION)")
+st.title("🏦 v32 REAL MARKET MONTE CARLO SYSTEM (100,000 SIMULATIONS)")
 
 data = fetch_data()
 
 st.info(f"TOTAL MATCHES LOADED: {len(data)}")
+
+shown = 0
 
 for m in data:
 
@@ -130,32 +140,44 @@ for m in data:
     if not in_window(k):
         continue
 
-    odds = None
-
     try:
         odds = m["bookmakers"][0]["markets"][0]["outcomes"]
         odds = [o["price"] for o in odds]
     except:
         continue
 
-    probs, signal = market_signal(odds)
+    probs = probs_from_odds(odds)
 
-    risk = upset(signal, probs)
+    mc = monte_carlo(probs)
 
-    ev = signal  # simplified market EV proxy
+    score = score_sim(probs)
 
-    action = decision(ev, risk)
+    ev_home = ev(mc["HOME"], odds[0])
+    ev_draw = ev(mc["DRAW"], odds[1])
+    ev_away = ev(mc["AWAY"], odds[2])
+
+    best = np.argmax([ev_home, ev_draw, ev_away])
+    pick = ["HOME", "DRAW", "AWAY"][best]
 
     st.markdown("━━━━━━━━━━━━━━━━━━")
     st.subheader(f"{away} vs {home}")
 
     st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
-    st.metric("Signal", round(signal, 4))
-    st.metric("Risk (upset score)", round(risk, 4))
-    st.metric("Decision", action)
 
+    st.write("🎲 Monte Carlo (100,000 sims)")
+    st.write(mc)
+
+    st.write("⚽ Predicted Score:", score)
+
+    st.write("💰 EV:")
     st.write({
-        "HOME": round(probs[0], 3),
-        "DRAW": round(probs[1], 3),
-        "AWAY": round(probs[2], 3),
+        "HOME": ev_home,
+        "DRAW": ev_draw,
+        "AWAY": ev_away
     })
+
+    st.success(f"🏆 PICK: {pick}")
+
+    shown += 1
+
+st.success(f"TOTAL MATCHES SHOWN: {shown}")
