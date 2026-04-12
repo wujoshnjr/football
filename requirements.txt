@@ -1,8 +1,8 @@
 streamlit
-aiohttp
 numpy
 pandas
 scipy
 plotly
 pytz
 python-dotenv
+aiohttp
