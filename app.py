@@ -2,18 +2,29 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import requests
+from datetime import datetime, timedelta, timezone
 
-st.set_page_config(page_title="許哥足球模型 v9", layout="wide")
+st.set_page_config(page_title="Xu Football Model v10", layout="wide")
 
-# 🔑 API KEY（一定要填）
 ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
 SPORTMONKS_KEY = "Rd1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 
 # ======================
-# 📡 取得賽事（Odds API）
+# 🕒 Filter 24h matches
+# ======================
+def is_within_24h(commence_time):
+    try:
+        match_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        return now <= match_time <= now + timedelta(hours=24)
+    except:
+        return False
+
+# ======================
+# 📡 Odds API
 # ======================
 def get_matches():
-    url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/"
+    url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
     params = {
         "apiKey": ODDS_API_KEY,
         "regions": "uk",
@@ -24,12 +35,14 @@ def get_matches():
     try:
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [m for m in data if is_within_24h(m.get("commence_time", ""))]
     except:
         return []
 
 # ======================
-# 📊 解析賠率
+# 📊 Parse Odds
 # ======================
 def parse_odds(match):
     odds = {}
@@ -40,7 +53,7 @@ def parse_odds(match):
     return odds
 
 # ======================
-# 📊 Sportmonks：近期狀態
+# 📊 Team Form (Sportmonks)
 # ======================
 def get_team_form(team):
     if not SPORTMONKS_KEY:
@@ -81,14 +94,13 @@ def get_team_form(team):
         return 0.5
 
 # ======================
-# 📊 H2H（暫用 fallback）
+# 📊 H2H (fallback)
 # ======================
-def get_h2h(home, away):
-    # ⚠️ 若沒有付費 H2H API，用保守值
+def get_h2h():
     return 0.5
 
 # ======================
-# 📊 Elo 模型
+# 📊 Elo
 # ======================
 def elo(team):
     return 1500 + (hash(team) % 300 - 150)
@@ -97,7 +109,7 @@ def elo_prob(a, b):
     return 1 / (1 + 10 ** ((b - a) / 400))
 
 # ======================
-# 💰 EV & Kelly
+# 💰 EV + Kelly
 # ======================
 def ev(p, odds):
     return p * odds - 1
@@ -110,35 +122,31 @@ def kelly(p, odds):
 # ======================
 # 🖥️ UI
 # ======================
-st.title("⚽ 許哥足球模型 v9（完整分析版）")
+st.title("⚽ Xu Football Model v10 (Pro)")
 
-if st.button("🚀 開始分析"):
+if st.button("🚀 Run Analysis"):
 
     matches = get_matches()
     results = []
 
     for m in matches:
-
         try:
             home = m.get("home_team")
             away = m.get("away_team")
+            time = m.get("commence_time")
 
             odds = parse_odds(m)
 
             h_odds = odds.get(home, 2.0)
             a_odds = odds.get(away, 2.0)
 
-            # 📊 真數據（form）
+            # 📊 Data
             form_h = get_team_form(home)
             form_a = get_team_form(away)
-
-            # 📊 H2H
-            h2h = get_h2h(home, away)
-
-            # 📊 Elo
+            h2h = get_h2h()
             elo_p = elo_prob(elo(home), elo(away))
 
-            # 📊 融合模型（核心）
+            # 📊 Model Fusion
             p_h = (elo_p * 0.4) + (form_h * 0.3) + (h2h * 0.3)
             p_a = 1 - p_h
 
@@ -146,28 +154,32 @@ if st.button("🚀 開始分析"):
             ev_a = ev(p_a, a_odds)
 
             if ev_h > ev_a:
-                pick = "主勝"
+                pick = "HOME"
                 p = p_h
                 odds_v = h_odds
                 ev_v = ev_h
             else:
-                pick = "客勝"
+                pick = "AWAY"
                 p = p_a
                 odds_v = a_odds
                 ev_v = ev_a
 
             k = kelly(p, odds_v)
 
+            # 🚫 Filter bad bets（關鍵）
+            if ev_v < 0:
+                continue
+
             results.append({
-                "比賽": f"{home} vs {away}",
-                "建議下注": pick,
-                "主隊狀態": round(form_h, 2),
-                "客隊狀態": round(form_a, 2),
-                "H2H": round(h2h, 2),
-                "賠率": round(odds_v, 2),
-                "勝率": round(p, 3),
+                "Match": f"{home} vs {away}",
+                "Date": time,
+                "Pick": pick,
+                "Odds": round(odds_v, 2),
+                "WinRate": round(p, 3),
                 "EV": round(ev_v, 3),
-                "Kelly": round(k, 3)
+                "Kelly": round(k, 3),
+                "Form(H)": round(form_h, 2),
+                "Form(A)": round(form_a, 2)
             })
 
         except:
@@ -176,7 +188,7 @@ if st.button("🚀 開始分析"):
     df = pd.DataFrame(results)
 
     if df.empty:
-        st.error("❌ 沒有可用資料（請確認 API KEY）")
+        st.error("❌ No value bets found (24h)")
     else:
-        st.success("✅ 分析完成（Top 10）")
+        st.success("✅ Top Value Bets (24h)")
         st.dataframe(df.sort_values("EV", ascending=False).head(10))
