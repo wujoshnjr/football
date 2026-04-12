@@ -4,6 +4,7 @@ import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
 import pandas as _pd
+from collections import Counter
 
 # =========================
 # TIME
@@ -46,7 +47,7 @@ def fetch_all():
     except:
         return []
 
-    all_data = []
+    data = []
 
     for s in SPORTS:
         try:
@@ -68,52 +69,58 @@ def fetch_all():
             if isinstance(d, list):
                 for i in d:
                     i["league"] = s
-                all_data.extend(d)
+                data.extend(d)
 
         except:
             continue
 
-    return all_data
+    return data
 
 # =========================
-# FORM / STRENGTH
+# MODEL
 # =========================
-def form():
-    return np.clip(np.random.normal(0.5, 0.2), 0.1, 0.9)
+def team_strength():
+    base = 1.3 + np.random.normal(0, 0.2)
+    form = np.clip(np.random.normal(0.5, 0.15), 0.2, 0.8)
+    return base * (0.8 + form)
 
-def h2h():
-    return np.clip(np.random.normal(0.5, 0.15), 0.2, 0.8)
+def simulate_match(lh, la):
 
-def strength():
-    fh, fa = form(), form()
-    bias = h2h()
-
-    lh = 1.5 * (0.7 + fh * 0.6 + bias * 0.2)
-    la = 1.2 * (0.7 + fa * 0.6 + (1 - bias) * 0.2)
-
-    return max(0.2, lh), max(0.2, la)
-
-# =========================
-# MONTE CARLO
-# =========================
-def simulate(lh, la):
-    h = d = a = 0
+    home = draw = away = 0
+    scores = Counter()
 
     for _ in range(SIMS):
+
         hg = np.random.poisson(lh)
         ag = np.random.poisson(la)
 
-        if hg > ag:
-            h += 1
-        elif hg == ag:
-            d += 1
-        else:
-            a += 1
+        scores[(hg, ag)] += 1
 
-    return h/SIMS, d/SIMS, a/SIMS
+        if hg > ag:
+            home += 1
+        elif hg == ag:
+            draw += 1
+        else:
+            away += 1
+
+    total = SIMS
+
+    top = scores.most_common(3)
+
+    def fmt(s, c):
+        return f"{s[0]}-{s[1]} ({round(c/total*100,1)}%)"
+
+    return (
+        home/total,
+        draw/total,
+        away/total,
+        fmt(*top[0]) if len(top) > 0 else "-",
+        fmt(*top[1]) if len(top) > 1 else "-",
+        fmt(*top[2]) if len(top) > 2 else "-"
+    )
 
 # =========================
-# EV / KELLY
+# BETTING LOGIC
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
@@ -122,60 +129,31 @@ def kelly(ev, odds):
     b = odds - 1
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
-# =========================
-# 💣 REAL UPSET MODEL（核心）
-# =========================
-def upset_score(ph, p_draw, pa, oh, oa):
+def recommend(p_home, p_draw, p_away, scores):
 
-    score = 0
+    total_goals = []
+    btts_yes = 0
 
-    fav_odds = min(oh, oa)
+    for s in scores:
+        hg, ag = s
+        total_goals.append(hg + ag)
+        if hg > 0 and ag > 0:
+            btts_yes += 1
 
-    # 1️⃣ 熱門過熱
-    if fav_odds < 1.6:
-        score += 0.25
+    avg_goals = np.mean(total_goals) if total_goals else 2.5
+    btts_prob = btts_yes / len(scores) if scores else 0.5
 
-    # 2️⃣ 平局壓力
-    if p_draw > 0.27:
-        score += 0.2
+    ou = "OVER 2.5" if avg_goals > 2.5 else "UNDER 2.5"
+    btts = "BTTS YES" if btts_prob > 0.5 else "BTTS NO"
 
-    # 3️⃣ 模型 vs 市場偏差
-    implied_home = 1 / oh
-    if abs(ph - implied_home) > 0.15:
-        score += 0.2
-
-    # 4️⃣ 客隊爆冷條件
-    if pa > 0.30 and oa > 2.8:
-        score += 0.25
-
-    return min(score, 1)
+    return ou, btts
 
 # =========================
-# 分類
+# APP UI
 # =========================
-def classify(ev, upset, p_draw):
-
-    if upset > 0.5:
-        return "🔴 STRONG UPSET", "高機率爆冷"
-
-    if upset > 0.3:
-        return "🟠 UPSET", "存在爆冷條件"
-
-    if ev > 0.05:
-        return "🟡 VALUE", "模型優勢"
-
-    if p_draw > 0.28:
-        return "⚪ DRAW HEAVY", "平局機率高"
-
-    return "🟢 NORMAL", "正常盤"
-
-# =========================
-# APP
-# =========================
-st.title("🏦 REAL UPSET INTELLIGENCE v6")
+st.title("🏦 FOOTBALL AI v7.5（PRO UI + BETTING ENGINE）")
 
 data = fetch_all()
-results = []
 
 for m in data:
 
@@ -200,43 +178,37 @@ for m in data:
         od = float(outs[1]["price"])
         oa = float(outs[2]["price"])
 
-        lh, la = strength()
-        ph, p_draw, pa = simulate(lh, la)
+        lh = team_strength()
+        la = team_strength()
+
+        ph, pd_, pa, s1, s2, s3 = simulate_match(lh, la)
 
         evs = {
             "HOME": EV(ph, oh),
-            "DRAW": EV(p_draw, od),
+            "DRAW": EV(pd_, od),
             "AWAY": EV(pa, oa)
         }
 
         pick = max(evs, key=evs.get)
         ev = evs[pick]
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
+        stake = kelly(ev, odds)
 
-        stake = kelly(ev, odds) * 100000
+        # UI CARD
+        st.markdown("---")
+        st.subheader(f"⚽ {home} vs {away}")
+        st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
 
-        upset = upset_score(ph, p_draw, pa, oh, oa)
-        label, reason = classify(ev, upset, p_draw)
+        col1, col2, col3 = st.columns(3)
 
-        results.append({
-            "match": f"{home} vs {away}",
-            "kickoff": k.strftime("%Y-%m-%d %H:%M"),
-            "pick": pick,
-            "type": label,
-            "reason": reason,
-            "EV": round(ev, 4),
-            "odds": odds,
-            "stake": round(stake, 2),
-            "UPSET_SCORE": round(upset, 2)
-        })
+        col1.metric("推薦", pick)
+        col2.metric("EV", round(ev, 3))
+        col3.metric("Stake", round(stake*100000, 2))
+
+        st.write("### 📊 預測比分")
+        st.write(f"🥇 {s1}")
+        st.write(f"🥈 {s2}")
+        st.write(f"🥉 {s3}")
 
     except:
         continue
-
-df = _pd.DataFrame.from_records(results)
-
-if df.empty:
-    st.warning("沒有比賽")
-else:
-    df = df.sort_values("EV", ascending=False)
-    st.dataframe(df)
