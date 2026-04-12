@@ -4,12 +4,11 @@ import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
 import pandas as pd
-import hashlib
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME WINDOW (KEY FIX)
+# TIME
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -23,23 +22,25 @@ def to_taipei(ts):
     except:
         return None
 
-def in_24h_window(kickoff):
+def in_24h(k):
     now = now_taipei()
-    return now <= kickoff <= now + dt.timedelta(hours=24)
+    return now <= k <= now + dt.timedelta(hours=24)
 
 # =========================
-# FETCH MARKET DATA
+# FETCH ALL MATCHES (NO OVER-FILTER)
 # =========================
 def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
-    url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
 
-    r = requests.get(url, params={
-        "api_key": key,
-        "regions": "eu",
-        "markets": "h2h",
-        "oddsFormat": "decimal"
-    })
+    r = requests.get(
+        "https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
+        params={
+            "api_key": key,
+            "regions": "eu",
+            "markets": "h2h",
+            "oddsFormat": "decimal"
+        }
+    )
 
     if r.status_code != 200:
         return []
@@ -47,39 +48,42 @@ def fetch_all():
     return r.json()
 
 # =========================
-# MARKET SIGNAL ENGINE (CORE)
+# MARKET SIGNAL (PRIMARY DRIVER)
 # =========================
 def market_signal(odds):
 
-    # implied probabilities
     probs = [1/o for o in odds]
-    total = sum(probs)
-    probs = [p/total for p in probs]
+    s = sum(probs)
+    probs = [p/s for p in probs]
 
-    # signal strength = imbalance
     signal = max(probs) - np.mean(probs)
 
     return signal, probs
 
 # =========================
-# LINEUP / NEWS ENGINE (SIMPLIFIED)
+# MODEL LAYER (SECONDARY)
 # =========================
-def lineup_signal():
-    # placeholder for real API (Opta / Sportmonks)
-    return np.random.uniform(-0.05, 0.05)
+def model_bias():
+    return np.random.uniform(-0.02, 0.02)
 
 # =========================
-# RISK FILTER
+# EXECUTION FILTER
 # =========================
-def risk_filter(signal):
-    return signal > 0.05
+def should_execute(signal):
+    return signal > 0.04
+
+def stake(signal):
+    return min(0.05, signal * 0.5)
 
 # =========================
-# MAIN APP
+# APP
 # =========================
-st.title("🏦 v21 MARKET-FIRST QUANT SYSTEM (PRODUCTION DESIGN)")
+st.title("🏦 v22 INSTITUTIONAL EXECUTION HEDGE FUND")
 
 data = fetch_all()
+
+all_matches = []
+exec_signals = []
 
 for m in data:
 
@@ -87,49 +91,72 @@ for m in data:
         home = m["home_team"]
         away = m["away_team"]
 
-        kickoff = to_taipei(m["commence_time"])
+        k = to_taipei(m["commence_time"])
 
-        # ❗ ONLY 24H WINDOW
-        if not kickoff or not in_24h_window(kickoff):
+        if not k or not in_24h(k):
             continue
 
-        books = m.get("bookmakers", [])
-        if not books:
-            continue
-
-        outcomes = books[0]["markets"][0]["outcomes"]
+        outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
         odds = [o["price"] for o in outcomes]
 
         signal, probs = market_signal(odds)
 
-        lineup_adj = lineup_signal()
+        model_adj = model_bias()
 
-        final_signal = signal + lineup_adj
+        final_signal = signal + model_adj
 
-        if not risk_filter(final_signal):
-            continue
-
-        # MARKET DOMINANT DECISION
         pick_idx = int(np.argmax(probs))
-        picks = ["HOME", "DRAW", "AWAY"]
-        pick = picks[pick_idx]
+        pick = ["HOME", "DRAW", "AWAY"][pick_idx]
 
-        st.markdown("━━━━━━━━━━━━━━━━━━")
-        st.subheader(f"{away} vs {home}")
+        match_data = {
+            "match": f"{away} vs {home}",
+            "time": k,
+            "signal": final_signal,
+            "pick": pick,
+            "probs": probs
+        }
 
-        st.write(f"🕒 台北時間：{kickoff.strftime('%Y-%m-%d %H:%M')}")
+        all_matches.append(match_data)
 
-        st.metric("MARKET SIGNAL", round(final_signal, 4))
-        st.metric("PICK (market-driven)", pick)
-
-        st.write("📊 IMPLIED PROBABILITIES")
-        st.write({
-            "HOME": round(probs[0], 3),
-            "DRAW": round(probs[1], 3),
-            "AWAY": round(probs[2], 3),
-        })
-
-        st.info("🧠 Model only used as confirmation layer (NOT driver)")
+        if should_execute(final_signal):
+            exec_signals.append({
+                **match_data,
+                "stake": stake(final_signal)
+            })
 
     except:
         continue
+
+# =========================
+# STAGE A: ALL MATCHES
+# =========================
+st.subheader("📊 ALL MATCHES (24H WINDOW)")
+
+for m in sorted(all_matches, key=lambda x: x["time"]):
+
+    st.markdown("━━━━━━━━━━━━━━━━━━")
+    st.write(f"⚽ {m['match']}")
+    st.write(f"🕒 {m['time'].strftime('%Y-%m-%d %H:%M')}")
+    st.write(f"📡 Signal: {round(m['signal'],4)}")
+    st.write(f"🎯 Pick: {m['pick']}")
+    st.write({
+        "HOME": round(m["probs"][0],3),
+        "DRAW": round(m["probs"][1],3),
+        "AWAY": round(m["probs"][2],3),
+    })
+
+# =========================
+# STAGE B: EXECUTION SIGNALS
+# =========================
+st.subheader("💰 EXECUTION SIGNALS")
+
+if not exec_signals:
+    st.info("No trade signals currently")
+
+for e in sorted(exec_signals, key=lambda x: x["signal"], reverse=True):
+
+    st.error("🚨 EXECUTE TRADE")
+    st.write(f"⚽ {e['match']}")
+    st.write(f"📡 Signal: {round(e['signal'],4)}")
+    st.write(f"💰 Stake: {round(e['stake'],4)}")
+    st.write(f"🎯 Pick: {e['pick']}")
