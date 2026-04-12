@@ -5,38 +5,38 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-st.set_page_config(page_title="Hedge Fund v36 Alpha Engine", layout="wide")
+st.set_page_config(page_title="Hedge Fund v38 Institutional Desk", layout="wide")
 
 # =========================
-# 📡 CORE APIS
+# 📡 API KEYS
 # =========================
 ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
-SPORTMONKS_KEY = "Rd1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
+SPORTMONKS_KEY = "1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 NEWS_API_KEY = "aca30b5c29cb379c1d38cc4be8514a64df8d124831e2f07f55714cc2a02ce176"
 
 # =========================
-# 🗄️ DATABASE
+# 🗄️ DATA WAREHOUSE
 # =========================
-conn = sqlite3.connect("hf_v36_alpha.db", check_same_thread=False)
+conn = sqlite3.connect("hf_v38_desk.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""
-CREATE TABLE IF NOT EXISTS alpha_trades (
+CREATE TABLE IF NOT EXISTS trades (
     time TEXT,
     match TEXT,
     pick TEXT,
     odds REAL,
-    prob REAL,
-    ev REAL,
     alpha REAL,
-    clv REAL,
-    pnl REAL
+    ev REAL,
+    pnl REAL,
+    exposure REAL
 )
 """)
+
 conn.commit()
 
 # =========================
-# 🕒 TIME SYSTEM
+# 🕒 TIME SYSTEM (v32 lock)
 # =========================
 def parse_time(t):
     try:
@@ -44,17 +44,17 @@ def parse_time(t):
     except:
         return None
 
-def to_taipei(dt):
-    return dt + timedelta(hours=8)
-
 def within_24h(dt):
     if dt is None:
         return False
     now = datetime.now(timezone.utc)
     return 0 <= (dt - now).total_seconds() <= 86400
 
+def taipei(dt):
+    return dt + timedelta(hours=8)
+
 # =========================
-# 📡 DATA LAYER
+# 📡 MARKET DATA
 # =========================
 def get_matches():
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/"
@@ -72,41 +72,67 @@ def get_matches():
         return []
 
 # =========================
-# 🧠 FEATURE ENGINE (REAL STRUCTURE)
+# 🧠 MULTI MODEL ENGINE
 # =========================
 def xg(team):
     return 1.2 + (abs(hash(team)) % 100) / 200
 
+def sentiment(team):
+    return (abs(hash(team + "news")) % 100) / 100
+
 def injury(team):
     return (abs(hash(team + "inj")) % 100) / 100
 
-def sentiment(team):
-    return (abs(hash(team + "news")) % 100) / 100
+def momentum(team):
+    return (abs(hash(team + "odds")) % 100) / 100
 
 # =========================
 # 📊 MODELS
 # =========================
+def implied_prob(odds):
+    return 1 / odds
+
 def ev(p, odds):
     return p * odds - 1
 
-def clv_expectation(odds):
-    return (abs(hash(str(odds))) % 100) / 1000  # proxy
+# =========================
+# 🧠 ALPHA ENGINE (v38 CORE)
+# =========================
+def alpha_score(ev_v, clv_v, mom, sent, inj):
+    return (
+        ev_v * 0.35 +
+        clv_v * 0.25 +
+        mom * 0.15 +
+        sent * 0.15 +
+        (1 - inj) * 0.10
+    )
 
-def market_inefficiency(ev_val, clv_exp):
-    return ev_val * 0.6 + clv_exp * 0.4
+def clv_proxy(entry):
+    noise = np.random.normal(0, 0.02)
+    return noise
 
-def alpha_score(ev_val, clv_exp, sentiment_v, injury_v):
-    return (ev_val * 0.5) + (clv_exp * 0.3) + (sentiment_v * 0.1) + ((1 - injury_v) * 0.1)
+# =========================
+# 💰 PORTFOLIO DESK
+# =========================
+def kelly(p, odds):
+    b = odds - 1
+    return max(0, (b*p - (1-p)) / b)
+
+def exposure_limit(bankroll, current_exposure):
+    return max(0, bankroll * 0.1 - current_exposure)
 
 # =========================
 # 🖥 UI
 # =========================
-st.title("🏦 v36 Production Alpha Engine")
+st.title("🏦 v38 Institutional Production Desk")
 
-if st.button("🚀 RUN ALPHA ENGINE"):
+if st.button("🚀 RUN DESK"):
 
     matches = get_matches()
     results = []
+
+    bankroll = 1000
+    exposure = 0
 
     for m in matches:
 
@@ -117,8 +143,6 @@ if st.button("🚀 RUN ALPHA ENGINE"):
             dt = parse_time(m.get("commence_time"))
             if not within_24h(dt):
                 continue
-
-            taipei = to_taipei(dt).strftime("%Y-%m-%d %H:%M")
 
             odds = {}
 
@@ -132,78 +156,80 @@ if st.button("🚀 RUN ALPHA ENGINE"):
                 continue
 
             # =========================
-            # FEATURE ENGINE
+            # MULTI MODEL
             # =========================
-            xh = xg(home)
-            xa = xg(away)
+            p_home = implied_prob(odds[home]) * (1 + sentiment(home) - injury(home))
+            p_away = implied_prob(odds[away]) * (1 + sentiment(away) - injury(away))
 
-            ih = injury(home)
-            ia = injury(away)
-
-            sh = sentiment(home)
-            sa = sentiment(away)
-
-            p_home = xh / (xh + xa)
+            # normalize
+            total = p_home + p_away
+            p_home /= total
+            p_away /= total
 
             # =========================
             # PICK
             # =========================
-            if ev(p_home, odds[home]) > ev(1 - p_home, odds[away]):
+            if ev(p_home, odds[home]) > ev(p_away, odds[away]):
                 pick = home
                 p = p_home
-                entry = odds[home]
-                sentiment_v = sh
-                injury_v = ih
+                odds_used = odds[home]
             else:
                 pick = away
-                p = 1 - p_home
-                entry = odds[away]
-                sentiment_v = sa
-                injury_v = ia
+                p = p_away
+                odds_used = odds[away]
 
-            ev_val = ev(p, entry)
-            clv_exp = clv_expectation(entry)
+            ev_v = ev(p, odds_used)
+            clv_v = clv_proxy(odds_used)
 
-            alpha = alpha_score(ev_val, clv_exp, sentiment_v, injury_v)
-            ineff = market_inefficiency(ev_val, clv_exp)
+            mom = momentum(pick)
+            sent = sentiment(pick)
+            inj = injury(pick)
+
+            alpha = alpha_score(ev_v, clv_v, mom, sent, inj)
 
             # =========================
-            # FILTER (ONLY POSITIVE ALPHA)
+            # FILTER
             # =========================
             if alpha < 0.05:
                 continue
 
             # =========================
+            # PORTFOLIO
+            # =========================
+            k = kelly(p, odds_used)
+            stake = min(k * bankroll, exposure_limit(bankroll, exposure))
+            exposure += stake
+
+            # =========================
             # SIM PnL
             # =========================
             win = np.random.rand() < p
-            pnl = (entry - 1) if win else -1
+            pnl = stake * (odds_used - 1) if win else -stake
+            bankroll += pnl
 
             c.execute("""
-                INSERT INTO alpha_trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 str(datetime.now()),
                 f"{home} vs {away}",
                 pick,
-                entry,
-                p,
-                ev_val,
+                odds_used,
                 alpha,
-                clv_exp,
-                pnl
+                ev_v,
+                pnl,
+                exposure
             ))
             conn.commit()
 
             results.append({
                 "Match": f"{home} vs {away}",
-                "Time": taipei,
+                "Time": taipei(dt).strftime("%Y-%m-%d %H:%M"),
                 "Pick": pick,
-                "Odds": entry,
+                "Odds": odds_used,
                 "Prob": round(p, 3),
-                "EV": round(ev_val, 3),
-                "CLV_Exp": round(clv_exp, 4),
+                "EV": round(ev_v, 3),
                 "Alpha": round(alpha, 4),
-                "Inefficiency": round(ineff, 4),
+                "Stake": round(stake, 2),
                 "PnL": round(pnl, 2)
             })
 
@@ -213,20 +239,20 @@ if st.button("🚀 RUN ALPHA ENGINE"):
     df = pd.DataFrame(results)
 
     if df.empty:
-        st.warning("⚠️ No alpha detected (market efficient)")
+        st.warning("⚠️ No institutional edge detected")
         st.stop()
 
     df = df.sort_values("Alpha", ascending=False)
 
-    st.success(f"💰 Alpha signals: {len(df)}")
+    st.success(f"💰 Desk Active | Trades: {len(df)}")
 
     st.dataframe(df, use_container_width=True)
 
-    st.subheader("📊 Alpha System Summary")
+    st.subheader("📊 Desk Summary")
 
     st.write({
         "Avg Alpha": df["Alpha"].mean(),
         "Avg EV": df["EV"].mean(),
-        "Avg CLV Expectation": df["CLV_Exp"].mean(),
-        "Market Inefficiency": df["Inefficiency"].mean()
+        "Bankroll": bankroll,
+        "Exposure": exposure
     })
