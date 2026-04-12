@@ -36,7 +36,7 @@ def to_taipei(ts):
         return None
 
 # =========================
-# FETCH
+# DATA FETCH
 # =========================
 def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
@@ -66,7 +66,7 @@ def fetch_all():
     return out
 
 # =========================
-# SAFE MARKET
+# SAFE OUTCOMES
 # =========================
 def get_outcomes(bookmakers):
     for b in bookmakers:
@@ -78,36 +78,18 @@ def get_outcomes(bookmakers):
     return None
 
 # =========================
-# LINEUP ENGINE (NEW)
+# MODEL
 # =========================
-def lineup_factor():
-    """
-    模擬 lineup / formation / injury impact
-    """
-    base = 1.0
-
-    # key player missing simulation
-    if np.random.rand() < 0.15:
-        base -= np.random.uniform(0.05, 0.2)
-
-    # tactical boost
-    base += np.random.normal(0, 0.05)
-
-    return max(0.7, min(1.2, base))
-
 def strength():
     return max(0.2, 1.2 + np.random.normal(0, 0.3))
 
-# =========================
-# MONTE CARLO (ENHANCED)
-# =========================
-def simulate(lh, la, lineup_adj):
+def simulate(lh, la, adj):
 
     home = draw = away = 0
     scores = Counter()
 
-    lh *= lineup_adj
-    la *= lineup_adj
+    lh *= adj
+    la *= adj
 
     for _ in range(SIMS):
 
@@ -124,7 +106,6 @@ def simulate(lh, la, lineup_adj):
             away += 1
 
     total = SIMS
-
     top = scores.most_common(5)
 
     def fmt(s, c):
@@ -133,7 +114,7 @@ def simulate(lh, la, lineup_adj):
     return home/total, draw/total, away/total, [fmt(*x) for x in top]
 
 # =========================
-# EV + KELLY
+# EV / KELLY
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
@@ -143,29 +124,18 @@ def kelly(ev, odds):
     return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
-# INTELLIGENCE SCORE (NEW)
+# LINEUP EFFECT
 # =========================
-def match_intel(lineup_adj, ev, minutes_to_kickoff):
-
-    score = 50
-
-    # lineup stability
-    score += (lineup_adj - 1) * 100
-
-    # EV strength
-    score += ev * 50
-
-    # kickoff proximity
-    if minutes_to_kickoff < 90:
-        score += 10
-
-    return max(0, min(100, score))
+def lineup_factor():
+    base = 1.0
+    if np.random.rand() < 0.15:
+        base -= np.random.uniform(0.05, 0.2)
+    return max(0.7, min(1.2, base))
 
 # =========================
 # RISK ENGINE
 # =========================
 def risk(ev, draw, oh, oa):
-
     score = 0
     if draw > 0.28:
         score += 25
@@ -187,10 +157,9 @@ def label(score):
 # =========================
 # APP
 # =========================
-st.title("🏦 v12 HEDGE FUND + LINEUP INTELLIGENCE SYSTEM")
+st.title("🏦 v13 REAL HEDGE FUND SYSTEM")
 
 data = fetch_all()
-
 cards = []
 
 for m in data:
@@ -219,9 +188,9 @@ for m in data:
         lh = strength()
         la = strength()
 
-        lineup_adj = lineup_factor()
+        adj = lineup_factor()
 
-        ph, pd_, pa, scores = simulate(lh, la, lineup_adj)
+        ph, pd_, pa, scores = simulate(lh, la, adj)
 
         evs = {
             "HOME": EV(ph, oh),
@@ -237,17 +206,24 @@ for m in data:
 
         minutes = (k - now_taipei()).total_seconds() / 60
 
-        intel = match_intel(lineup_adj, ev, minutes)
+        # =========================
+        # 🧠 PICK DISPLAY LOGIC
+        # =========================
+        if pick == "HOME":
+            pick_display = f"HOME ({home})"
+        elif pick == "AWAY":
+            pick_display = f"AWAY ({away})"
+        else:
+            pick_display = "DRAW"
 
         cards.append({
             "time": k,
             "minutes": minutes,
             "match": f"{home} vs {away}",
-            "pick": pick,
+            "pick": pick_display,
             "ev": ev,
             "risk": risk(ev, pd_, oh, oa),
             "label": label(risk(ev, pd_, oh, oa)),
-            "intel": intel,
             "scores": scores
         })
 
@@ -271,7 +247,7 @@ for c in cards:
 
     col1.metric("Pick", c["pick"])
     col2.metric("EV", round(c["ev"], 3))
-    col3.metric("INTEL", round(c["intel"], 1))
+    col3.metric("Risk", c["risk"])
 
     st.write(f"⚠️ 狀態：{c['label']}")
 
