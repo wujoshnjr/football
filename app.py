@@ -4,11 +4,12 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 from zoneinfo import ZoneInfo
+from math import exp, factorial
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# GLOBAL LEAGUES
+# CONFIG
 # =========================
 SPORTS = [
     "soccer_epl",
@@ -38,16 +39,15 @@ def in_24h(t):
     return now() <= t <= now() + dt.timedelta(hours=24)
 
 # =========================
-# FETCH GLOBAL ODDS
+# ODDS API
 # =========================
-def fetch_all_odds():
-
+def fetch_odds():
     key = st.secrets["API_KEYS"]["ODDS_API"]
-    all_matches = []
 
-    for sport in SPORTS:
+    all_data = []
 
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
+    for s in SPORTS:
+        url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
 
         r = requests.get(url, params={
             "api_key": key,
@@ -55,27 +55,13 @@ def fetch_all_odds():
             "markets": "h2h"
         })
 
-        if r.status_code != 200:
-            continue
+        if r.status_code == 200:
+            try:
+                all_data += r.json()
+            except:
+                continue
 
-        try:
-            data = r.json()
-            all_matches.extend(data)
-        except:
-            continue
-
-    return all_matches
-
-# =========================
-# FALLBACK（多場）
-# =========================
-def fallback():
-
-    return [
-        {"home":"Team A","away":"Team B","time":"2026-04-12T18:00:00Z","odds":[2.1,3.2,3.5]},
-        {"home":"Team C","away":"Team D","time":"2026-04-12T20:00:00Z","odds":[1.9,3.4,4.0]},
-        {"home":"Team E","away":"Team F","time":"2026-04-13T01:00:00Z","odds":[2.5,3.1,2.8]}
-    ]
+    return all_data
 
 # =========================
 # NORMALIZE
@@ -86,27 +72,21 @@ def normalize(data):
 
     for m in data:
 
-        home = m.get("home_team") or m.get("home")
-        away = m.get("away_team") or m.get("away")
-        time = m.get("commence_time") or m.get("time")
+        home = m.get("home_team")
+        away = m.get("away_team")
+        time = m.get("commence_time")
 
         if not home or not away:
             continue
 
         kickoff = to_taipei(time)
-        if not kickoff:
-            continue
-
-        if not in_24h(kickoff):
+        if not kickoff or not in_24h(kickoff):
             continue
 
         try:
-            outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
-            odds = [o["price"] for o in outcomes]
+            odds = m["bookmakers"][0]["markets"][0]["outcomes"]
+            odds = [o["price"] for o in odds]
         except:
-            odds = m.get("odds")
-
-        if not odds:
             continue
 
         matches.append({
@@ -119,91 +99,132 @@ def normalize(data):
     return matches
 
 # =========================
-# MODEL
+# MARKET PROB
 # =========================
 def market_prob(odds):
-    inv = [1/o for o in odds]
+    inv = [1/x for x in odds]
     s = sum(inv)
     return [x/s for x in inv]
 
-def adjust(mp):
-    noise = np.random.normal(0,0.05,3)
-    upset = np.random.uniform(-0.1,0.1)
+# =========================
+# 🧠 REAL FOOTBALL MODEL (Poisson)
+# =========================
+def estimate_lambda(mp):
 
-    p = [
-        mp[0] + noise[0] + upset,
-        mp[1] + noise[1],
-        mp[2] + noise[2] - upset
-    ]
+    # 基準進球（簡化 xG proxy）
+    base_goal = 1.35
 
-    p = np.clip(p,0.01,0.98)
-    s = sum(p)
-    return [x/s for x in p]
+    home_adv = 0.15
 
-def simulate(p, n=100000):
-    res = np.random.choice([0,1,2], size=n, p=p)
-    return np.bincount(res, minlength=3)/n
+    lam_home = base_goal * (mp[0] + home_adv)
+    lam_away = base_goal * (mp[2])
 
+    return max(lam_home,0.2), max(lam_away,0.2)
+
+# =========================
+# POISSON SIMULATION (100K)
+# =========================
+def poisson_sim(lh, la, n=100000):
+
+    max_goals = 6
+
+    results = {}
+
+    for _ in range(n):
+
+        hg = np.random.poisson(lh)
+        ag = np.random.poisson(la)
+
+        key = f"{hg}-{ag}"
+        results[key] = results.get(key, 0) + 1
+
+    sorted_scores = sorted(results.items(), key=lambda x: x[1], reverse=True)
+
+    return sorted_scores[:5]
+
+# =========================
+# EV
+# =========================
 def ev(prob, odds):
     return prob * odds - 1
 
-def trap(model_p, market_p):
+# =========================
+# TRAP DETECTION
+# =========================
+def trap(market, model):
 
-    if market_p[0] > 0.6 and model_p[0] < 0.5:
-        return "⚠️ 主隊陷阱盤"
+    if market[0] > 0.65 and model[0] < 0.55:
+        return "⚠️ HOME TRAP"
 
-    if market_p[2] > 0.6 and model_p[2] < 0.5:
-        return "⚠️ 客隊陷阱盤"
+    if market[2] > 0.65 and model[2] < 0.55:
+        return "⚠️ AWAY TRAP"
 
-    if abs(model_p[0]-market_p[0]) > 0.15:
-        return "⚠️ 異常盤"
+    return "OK"
 
-    return "正常"
+# =========================
+# PROB FROM POISSON SIM
+# =========================
+def result_prob(scores):
+
+    home_w = draw = away_w = 0
+
+    total = sum([x[1] for x in scores])
+
+    for s, c in scores:
+        h, a = map(int, s.split("-"))
+
+        if h > a:
+            home_w += c
+        elif h == a:
+            draw += c
+        else:
+            away_w += c
+
+    return [home_w/total, draw/total, away_w/total]
 
 # =========================
 # APP
 # =========================
-st.title("🏦 QUANT HEDGE FUND v3 (GLOBAL)")
+st.title("🏦 QUANT HEDGE FUND V4 (REAL SCORE AI)")
 
-raw = fetch_all_odds()
+raw = fetch_odds()
 
 matches = normalize(raw)
 
 if not matches:
-    st.warning("⚠️ 使用備援資料")
-    matches = normalize(fallback())
+    st.warning("⚠️ fallback mode")
+    matches = [
+        {"home":"A","away":"B","time":now(),"odds":[2.1,3.2,3.5]}
+    ]
 
-st.write("📊 比賽數量:", len(matches))
-
-# 排序（台北時間）
 matches = sorted(matches, key=lambda x: x["time"])
 
 for m in matches:
 
     mp = market_prob(m["odds"])
-    adj = adjust(mp)
-    sim = simulate(adj)
 
-    evs = [
-        ev(sim[0], m["odds"][0]),
-        ev(sim[1], m["odds"][1]),
-        ev(sim[2], m["odds"][2])
-    ]
+    lh, la = estimate_lambda(mp)
 
-    pick_i = int(np.argmax(evs))
-    pick = ["主隊","平局","客隊"][pick_i]
+    top_scores = poisson_sim(lh, la, 100000)
 
-    st.markdown("----")
+    probs = result_prob(top_scores)
 
-    st.markdown(f"### ⚽ {m['away']}（客） vs {m['home']}（主）")
+    pick = ["HOME","DRAW","AWAY"][int(np.argmax(probs))]
 
-    st.write("🕒 台北時間:", m["time"])
+    st.markdown("---")
 
-    st.write("📊 市場機率:", [round(x,3) for x in mp])
-    st.write("🤖 模型機率:", [round(x,3) for x in sim])
+    st.markdown(f"### ⚽ {m['away']} vs {m['home']}")
 
-    st.write("💰 EV:", [round(x,3) for x in evs])
+    st.write("🕒 Taipei:", m["time"])
 
-    st.write(f"🎯 推薦: {pick}")
+    st.write("📊 Market:", [round(x,3) for x in mp])
 
-    st.write("🚨 盤口分析:", trap(sim, mp))
+    st.write("⚽ Top 5 Scores:")
+    for s in top_scores:
+        st.write(s)
+
+    st.write("📈 Prob:", [round(x,3) for x in probs])
+
+    st.write("🎯 PICK:", pick)
+
+    st.write("🚨 TRAP:", trap(mp, probs))
