@@ -8,7 +8,7 @@ import pandas as pd
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# TIME
+# TIME FILTER
 # =========================
 def now_taipei():
     return dt.datetime.now(TAIPEI)
@@ -23,11 +23,10 @@ def to_taipei(ts):
         return None
 
 def in_24h(k):
-    now = now_taipei()
-    return now <= k <= now + dt.timedelta(hours=24)
+    return now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)
 
 # =========================
-# FETCH ALL MATCHES (NO OVER-FILTER)
+# DATA
 # =========================
 def fetch_all():
     key = st.secrets["API_KEYS"]["ODDS_API"]
@@ -48,42 +47,50 @@ def fetch_all():
     return r.json()
 
 # =========================
-# MARKET SIGNAL (PRIMARY DRIVER)
+# MARKET REGIME ENGINE
 # =========================
-def market_signal(odds):
+def regime(probs):
 
-    probs = [1/o for o in odds]
-    s = sum(probs)
-    probs = [p/s for p in probs]
+    vol = np.std(probs)
 
-    signal = max(probs) - np.mean(probs)
-
-    return signal, probs
-
-# =========================
-# MODEL LAYER (SECONDARY)
-# =========================
-def model_bias():
-    return np.random.uniform(-0.02, 0.02)
+    if vol > 0.05:
+        return "STEAMING", 1.3
+    elif vol < 0.02:
+        return "FLAT", 1.0
+    else:
+        return "NORMAL", 1.1
 
 # =========================
-# EXECUTION FILTER
+# SIGNAL ENGINE (FIXED)
 # =========================
-def should_execute(signal):
-    return signal > 0.04
+def signal_engine(probs, multiplier):
 
-def stake(signal):
-    return min(0.05, signal * 0.5)
+    max_p = max(probs)
+
+    base_signal = (max_p - 0.33) * 3
+
+    return base_signal * multiplier
+
+# =========================
+# EXECUTION MATRIX
+# =========================
+def decision(signal):
+
+    if signal > 0.45:
+        return "STRONG BUY"
+    elif signal > 0.25:
+        return "BUY"
+    elif signal > 0.10:
+        return "WATCH"
+    else:
+        return "AVOID"
 
 # =========================
 # APP
 # =========================
-st.title("🏦 v22 INSTITUTIONAL EXECUTION HEDGE FUND")
+st.title("🏦 v24 INSTITUTIONAL EXECUTION SYSTEM (FINAL TRADING DESK)")
 
 data = fetch_all()
-
-all_matches = []
-exec_signals = []
 
 for m in data:
 
@@ -96,67 +103,31 @@ for m in data:
         if not k or not in_24h(k):
             continue
 
-        outcomes = m["bookmakers"][0]["markets"][0]["outcomes"]
-        odds = [o["price"] for o in outcomes]
+        outs = m["bookmakers"][0]["markets"][0]["outcomes"]
+        odds = [o["price"] for o in outs]
 
-        signal, probs = market_signal(odds)
+        probs = np.array([1/o for o in odds])
+        probs = probs / probs.sum()
 
-        model_adj = model_bias()
+        reg, mult = regime(probs)
 
-        final_signal = signal + model_adj
+        signal = signal_engine(probs, mult)
 
-        pick_idx = int(np.argmax(probs))
-        pick = ["HOME", "DRAW", "AWAY"][pick_idx]
+        exec_level = decision(signal)
 
-        match_data = {
-            "match": f"{away} vs {home}",
-            "time": k,
-            "signal": final_signal,
-            "pick": pick,
-            "probs": probs
-        }
+        st.markdown("━━━━━━━━━━━━━━━━━━")
+        st.subheader(f"{away} vs {home}")
 
-        all_matches.append(match_data)
+        st.write(f"🕒 台北時間：{k.strftime('%Y-%m-%d %H:%M')}")
+        st.write(f"📡 Market Regime: {reg}")
+        st.metric("Signal", round(signal, 4))
+        st.write(f"🎯 Execution: {exec_level}")
 
-        if should_execute(final_signal):
-            exec_signals.append({
-                **match_data,
-                "stake": stake(final_signal)
-            })
+        st.write({
+            "HOME": round(probs[0], 3),
+            "DRAW": round(probs[1], 3),
+            "AWAY": round(probs[2], 3),
+        })
 
     except:
         continue
-
-# =========================
-# STAGE A: ALL MATCHES
-# =========================
-st.subheader("📊 ALL MATCHES (24H WINDOW)")
-
-for m in sorted(all_matches, key=lambda x: x["time"]):
-
-    st.markdown("━━━━━━━━━━━━━━━━━━")
-    st.write(f"⚽ {m['match']}")
-    st.write(f"🕒 {m['time'].strftime('%Y-%m-%d %H:%M')}")
-    st.write(f"📡 Signal: {round(m['signal'],4)}")
-    st.write(f"🎯 Pick: {m['pick']}")
-    st.write({
-        "HOME": round(m["probs"][0],3),
-        "DRAW": round(m["probs"][1],3),
-        "AWAY": round(m["probs"][2],3),
-    })
-
-# =========================
-# STAGE B: EXECUTION SIGNALS
-# =========================
-st.subheader("💰 EXECUTION SIGNALS")
-
-if not exec_signals:
-    st.info("No trade signals currently")
-
-for e in sorted(exec_signals, key=lambda x: x["signal"], reverse=True):
-
-    st.error("🚨 EXECUTE TRADE")
-    st.write(f"⚽ {e['match']}")
-    st.write(f"📡 Signal: {round(e['signal'],4)}")
-    st.write(f"💰 Stake: {round(e['stake'],4)}")
-    st.write(f"🎯 Pick: {e['pick']}")
