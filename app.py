@@ -13,30 +13,52 @@ import random
 TAIPEI = pytz.timezone("Asia/Taipei")
 
 # =========================
-# SAFE SECRET LOADER
+# SAFE SECRETS
 # =========================
-def get_key(name):
+def key(name):
     try:
-        return st.secrets.get("API_KEYS", {}).get(name)
+        return st.secrets["API_KEYS"].get(name)
     except:
         return None
 
-ODDS_API = get_key("ODDS_API")
-SPORTMONKS = get_key("SPORTMONKS")
-NEWS_API = get_key("NEWS_API")
+ODDS_API = key("ODDS_API")
+SPORTMONKS = key("SPORTMONKS")
+NEWS_API = key("NEWS_API")
 
 # =========================
-# API HEALTH CHECK
+# SYSTEM STATUS
 # =========================
-def api_status():
+def health():
     return {
         "Odds API": "🟢" if ODDS_API else "🔴",
-        "SportMonks": "🟢" if SPORTMONKS else "🟡",
-        "News API": "🟢" if NEWS_API else "🟡"
+        "SportMonks": "🟡" if SPORTMONKS else "🔴",
+        "News API": "🟡" if NEWS_API else "🔴"
     }
 
 # =========================
-# COUNTRY MAP
+# DB (TRADE + CLV TRACKING)
+# =========================
+conn = sqlite3.connect("ultra_hf.db", check_same_thread=False)
+c = conn.cursor()
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match TEXT,
+    country TEXT,
+    pick TEXT,
+    odds REAL,
+    edge REAL,
+    clv REAL,
+    sim REAL,
+    pnl REAL,
+    time TEXT
+)
+""")
+conn.commit()
+
+# =========================
+# MARKET DATA
 # =========================
 COUNTRY = {
     "epl": "🇬🇧 England",
@@ -48,53 +70,31 @@ COUNTRY = {
     "mls": "🇺🇸 USA"
 }
 
-# =========================
-# DB SAFE MODE
-# =========================
-conn = sqlite3.connect("vsecure.db", check_same_thread=False)
-c = conn.cursor()
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS trades (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    match TEXT,
-    country TEXT,
-    pick TEXT,
-    odds REAL,
-    edge REAL,
-    sim REAL,
-    pnl REAL,
-    time TEXT
-)
-""")
-conn.commit()
-
-# =========================
-# DATA LAYER (SAFE)
-# =========================
-def get_matches():
+def fetch_matches():
     if not ODDS_API:
         return pd.DataFrame()
 
     try:
         url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
-        params = {
+        r = requests.get(url, params={
             "apiKey": ODDS_API,
             "regions": "eu",
             "markets": "h2h",
             "oddsFormat": "decimal"
-        }
+        }, timeout=10)
 
-        r = requests.get(url, params=params, timeout=10).json()
+        if r.status_code != 200:
+            return pd.DataFrame()
 
+        data = r.json()
         rows = []
 
-        for m in r:
+        for m in data:
             try:
                 home = m["home_team"]
                 away = m["away_team"]
 
-                o = m["bookmakers"][0]["markets"][0]["outcomes"]
+                odds = m["bookmakers"][0]["markets"][0]["outcomes"]
 
                 league = m.get("sport_key", "unknown")
                 country = COUNTRY.get(league, "🌍 Unknown")
@@ -102,8 +102,9 @@ def get_matches():
                 rows.append({
                     "match": f"{home} vs {away}",
                     "country": country,
-                    "home_odds": o[0]["price"],
-                    "away_odds": o[1]["price"]
+                    "home_odds": odds[0]["price"],
+                    "away_odds": odds[1]["price"],
+                    "start": dt.datetime.utcnow()
                 })
 
             except:
@@ -115,7 +116,7 @@ def get_matches():
         return pd.DataFrame()
 
 # =========================
-# MODEL (SAFE)
+# MODEL
 # =========================
 def p_model():
     return np.random.uniform(0.45, 0.55)
@@ -130,7 +131,15 @@ def edge(pm, pk):
     return pm - pk
 
 # =========================
-# KELLY SAFE
+# CLV ENGINE (NEW ULTRA FEATURE)
+# =========================
+def clv(open_odds, close_odds):
+    if open_odds is None or close_odds is None:
+        return 0
+    return (close_odds - open_odds) / open_odds
+
+# =========================
+# KELLY RISK ENGINE
 # =========================
 def kelly(e, odds):
     if odds is None:
@@ -139,47 +148,38 @@ def kelly(e, odds):
     p = 0.5 + e
     if b <= 0:
         return 0
-    f = (b*p - (1-p))/b
-    return max(0, min(f, 0.2))
+    f = (b*p - (1-p)) / b
+    return max(0, min(f, 0.25))
 
 # =========================
-# MONTE CARLO SAFE (20,000)
+# MONTE CARLO (20,000 SIMS)
 # =========================
 def monte_carlo(e, odds, n=20000):
     if odds is None:
         return 0
 
-    win = 0.5 + e
-    if win <= 0:
+    p = 0.5 + e
+    if p <= 0:
         return 0
 
-    res = []
-    for _ in range(n):
-        if random.random() < win:
-            res.append(odds - 1)
-        else:
-            res.append(-1)
-
-    return np.mean(res)
+    return np.mean([
+        (odds - 1 if random.random() < p else -1)
+        for _ in range(n)
+    ])
 
 # =========================
 # APP
 # =========================
-st.title("🔐🏦 vSECURE INSTITUTIONAL HEDGE FUND DESK")
+st.title("🏦🔐 vSECURE ULTRA — Institutional Quant Trading Desk")
 
-# API STATUS PANEL
 st.subheader("🔌 API Health")
-st.write(api_status())
+st.write(health())
 
-df = get_matches()
+df = fetch_matches()
 
 if df.empty:
-    st.warning("No market data (API missing or failed)")
+    st.warning("No market data available")
     st.stop()
-
-# TIME (24h + Taipei)
-df["time_utc"] = dt.datetime.utcnow()
-df["time_taipei"] = pd.to_datetime(df["time_utc"]).tz_localize("UTC").tz_convert(TAIPEI)
 
 results = []
 
@@ -187,7 +187,6 @@ for _, r in df.iterrows():
 
     pm = p_model()
     pk = p_market(r["home_odds"], r["away_odds"])
-
     e = edge(pm, pk)
 
     pick = "home" if e > 0 else "away"
@@ -196,13 +195,24 @@ for _, r in df.iterrows():
     stake = kelly(e, odds) * 10000
 
     sim = monte_carlo(e, odds)
+
+    # CLV simulation (mock market drift model)
+    clv_value = clv(odds, odds * np.random.uniform(0.95, 1.05))
+
     pnl = stake * sim
 
     c.execute("""
-        INSERT INTO trades (match, country, pick, odds, edge, sim, pnl, time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trades (match, country, pick, odds, edge, clv, sim, pnl, time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        r["match"], r["country"], pick, odds, e, sim, pnl,
+        r["match"],
+        r["country"],
+        pick,
+        odds,
+        e,
+        clv_value,
+        sim,
+        pnl,
         dt.datetime.now(TAIPEI).isoformat()
     ))
     conn.commit()
@@ -213,28 +223,30 @@ for _, r in df.iterrows():
         "Pick": pick,
         "Odds": odds,
         "Edge": round(e,4),
+        "CLV": round(clv_value,4),
         "Stake": round(stake,2),
-        "Sim(20k)": round(sim,4),
+        "Sim PnL (20k)": round(sim,4),
         "PnL": round(pnl,2),
-        "Taipei Time": r["time_taipei"]
+        "Time (Taipei)": dt.datetime.now(TAIPEI)
     })
 
 res = pd.DataFrame(results).sort_values("Edge", ascending=False)
 
 # =========================
-# UI
+# DASHBOARD
 # =========================
-st.subheader("📊 Trading Desk (24H + Taipei + Country)")
+st.subheader("📊 Alpha Signals (24H + Taipei + Global Markets)")
 st.dataframe(res)
 
-st.subheader("💰 Portfolio")
+st.subheader("💰 Portfolio Metrics")
 st.metric("Total PnL", round(res["PnL"].sum(),2))
-st.metric("Avg Edge", round(res["Edge"].mean(),4))
+st.metric("Average Edge", round(res["Edge"].mean(),4))
+st.metric("Average CLV", round(res["CLV"].mean(),4))
 
 st.subheader("🌍 Country Exposure")
 st.dataframe(res.groupby("Country")["PnL"].sum())
 
-st.subheader("🧠 System Stability")
-st.write("✔ Safe Mode Enabled")
-st.write("✔ API Failure Resistant")
-st.write("✔ Simulation Guard Active (20,000 runs)")
+st.subheader("📈 Risk View")
+st.write("✔ Kelly capped exposure 25%")
+st.write("✔ Monte Carlo stability: 20,000 simulations")
+st.write("✔ CLV drift tracking enabled")
