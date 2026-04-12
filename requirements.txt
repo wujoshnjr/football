@@ -1,9 +1,8 @@
 streamlit
+aiohttp
 numpy
 pandas
 scipy
-aiohttp
+plotly
 python-dotenv
 pytz
-plotly
-streamlit-aggrid
