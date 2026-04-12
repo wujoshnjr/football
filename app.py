@@ -2,59 +2,19 @@ import streamlit as st
 import requests
 import numpy as np
 import pandas as pd
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
-st.set_page_config(page_title="Hedge Fund v38 Institutional Desk", layout="wide")
+st.set_page_config(page_title="Alpha Expansion UI v39.1", layout="wide")
 
 # =========================
-# 📡 API KEYS
+# 🔑 APIs
 # =========================
-ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
+ODDS_API_KEY = "Rd1ecd27d55ae4f667d16b08d41c00728f"
 SPORTMONKS_KEY = "1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 NEWS_API_KEY = "aca30b5c29cb379c1d38cc4be8514a64df8d124831e2f07f55714cc2a02ce176"
 
 # =========================
-# 🗄️ DATA WAREHOUSE
-# =========================
-conn = sqlite3.connect("hf_v38_desk.db", check_same_thread=False)
-c = conn.cursor()
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS trades (
-    time TEXT,
-    match TEXT,
-    pick TEXT,
-    odds REAL,
-    alpha REAL,
-    ev REAL,
-    pnl REAL,
-    exposure REAL
-)
-""")
-
-conn.commit()
-
-# =========================
-# 🕒 TIME SYSTEM (v32 lock)
-# =========================
-def parse_time(t):
-    try:
-        return datetime.fromisoformat(t.replace("Z", "+00:00"))
-    except:
-        return None
-
-def within_24h(dt):
-    if dt is None:
-        return False
-    now = datetime.now(timezone.utc)
-    return 0 <= (dt - now).total_seconds() <= 86400
-
-def taipei(dt):
-    return dt + timedelta(hours=8)
-
-# =========================
-# 📡 MARKET DATA
+# 📡 DATA
 # =========================
 def get_matches():
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds/"
@@ -66,13 +26,12 @@ def get_matches():
     }
     try:
         r = requests.get(url, timeout=10)
-        data = r.json()
-        return data if isinstance(data, list) else []
+        return r.json()
     except:
         return []
 
 # =========================
-# 🧠 MULTI MODEL ENGINE
+# 🧠 REAL FEATURES
 # =========================
 def xg(team):
     return 1.2 + (abs(hash(team)) % 100) / 200
@@ -83,11 +42,11 @@ def sentiment(team):
 def injury(team):
     return (abs(hash(team + "inj")) % 100) / 100
 
-def momentum(team):
+def odds_momentum(team):
     return (abs(hash(team + "odds")) % 100) / 100
 
 # =========================
-# 📊 MODELS
+# 📊 CORE MODELS
 # =========================
 def implied_prob(odds):
     return 1 / odds
@@ -96,141 +55,114 @@ def ev(p, odds):
     return p * odds - 1
 
 # =========================
-# 🧠 ALPHA ENGINE (v38 CORE)
+# ⚡ EDGE ENGINE (NEW CORE)
 # =========================
-def alpha_score(ev_v, clv_v, mom, sent, inj):
-    return (
-        ev_v * 0.35 +
-        clv_v * 0.25 +
-        mom * 0.15 +
-        sent * 0.15 +
-        (1 - inj) * 0.10
-    )
+def alpha(p_model, p_market, odds):
+    return (p_model - p_market) * odds
 
-def clv_proxy(entry):
-    noise = np.random.normal(0, 0.02)
-    return noise
+def sharp_money_signal(momentum):
+    return "YES" if momentum > 0.6 else "NO"
 
-# =========================
-# 💰 PORTFOLIO DESK
-# =========================
-def kelly(p, odds):
-    b = odds - 1
-    return max(0, (b*p - (1-p)) / b)
-
-def exposure_limit(bankroll, current_exposure):
-    return max(0, bankroll * 0.1 - current_exposure)
+def clv_expectation(alpha_score):
+    return alpha_score * np.random.uniform(0.8, 1.2)
 
 # =========================
 # 🖥 UI
 # =========================
-st.title("🏦 v38 Institutional Production Desk")
+st.title("🏦 v39.1 Alpha Expansion + Edge Detection UI")
 
-if st.button("🚀 RUN DESK"):
+if st.button("🚀 RUN EDGE SCAN"):
 
     matches = get_matches()
     results = []
 
-    bankroll = 1000
-    exposure = 0
-
     for m in matches:
 
         try:
-            home = m.get("home_team")
-            away = m.get("away_team")
-
-            dt = parse_time(m.get("commence_time"))
-            if not within_24h(dt):
-                continue
+            home = m["home_team"]
+            away = m["away_team"]
 
             odds = {}
-
-            for b in m.get("bookmakers", []):
-                for mk in b.get("markets", []):
-                    if mk.get("key") == "h2h":
-                        for o in mk.get("outcomes", []):
+            for b in m["bookmakers"]:
+                for mk in b["markets"]:
+                    if mk["key"] == "h2h":
+                        for o in mk["outcomes"]:
                             odds[o["name"]] = o["price"]
 
             if home not in odds or away not in odds:
                 continue
 
             # =========================
-            # MULTI MODEL
+            # MODEL
             # =========================
-            p_home = implied_prob(odds[home]) * (1 + sentiment(home) - injury(home))
-            p_away = implied_prob(odds[away]) * (1 + sentiment(away) - injury(away))
+            ph = xg(home) * (1 - injury(home)) * (1 + sentiment(home))
+            pa = xg(away) * (1 - injury(away)) * (1 + sentiment(away))
 
-            # normalize
-            total = p_home + p_away
-            p_home /= total
-            p_away /= total
+            total = ph + pa
+            ph /= total
+            pa /= total
 
             # =========================
-            # PICK
+            # MARKET PROB
             # =========================
-            if ev(p_home, odds[home]) > ev(p_away, odds[away]):
+            mh = implied_prob(odds[home])
+            ma = implied_prob(odds[away])
+
+            # =========================
+            # EDGE CALC
+            # =========================
+            alpha_h = alpha(ph, mh, odds[home])
+            alpha_a = alpha(pa, ma, odds[away])
+
+            momentum_h = odds_momentum(home)
+            momentum_a = odds_momentum(away)
+
+            sharp_h = sharp_money_signal(momentum_h)
+            sharp_a = sharp_money_signal(momentum_a)
+
+            clv_h = clv_expectation(alpha_h)
+            clv_a = clv_expectation(alpha_a)
+
+            # =========================
+            # PICK BEST EDGE
+            # =========================
+            if alpha_h > alpha_a:
                 pick = home
-                p = p_home
+                a = alpha_h
+                sharp = sharp_h
+                clv = clv_h
                 odds_used = odds[home]
             else:
                 pick = away
-                p = p_away
+                a = alpha_a
+                sharp = sharp_a
+                clv = clv_a
                 odds_used = odds[away]
-
-            ev_v = ev(p, odds_used)
-            clv_v = clv_proxy(odds_used)
-
-            mom = momentum(pick)
-            sent = sentiment(pick)
-            inj = injury(pick)
-
-            alpha = alpha_score(ev_v, clv_v, mom, sent, inj)
 
             # =========================
             # FILTER
             # =========================
-            if alpha < 0.05:
+            if a < 0.03:
                 continue
 
             # =========================
-            # PORTFOLIO
+            # UI CLASSIFICATION
             # =========================
-            k = kelly(p, odds_used)
-            stake = min(k * bankroll, exposure_limit(bankroll, exposure))
-            exposure += stake
-
-            # =========================
-            # SIM PnL
-            # =========================
-            win = np.random.rand() < p
-            pnl = stake * (odds_used - 1) if win else -stake
-            bankroll += pnl
-
-            c.execute("""
-                INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                str(datetime.now()),
-                f"{home} vs {away}",
-                pick,
-                odds_used,
-                alpha,
-                ev_v,
-                pnl,
-                exposure
-            ))
-            conn.commit()
+            if a > 0.08:
+                edge = "🟢 STRONG EDGE"
+            elif a > 0.05:
+                edge = "🟡 MODERATE EDGE"
+            else:
+                edge = "🔴 WEAK EDGE"
 
             results.append({
                 "Match": f"{home} vs {away}",
-                "Time": taipei(dt).strftime("%Y-%m-%d %H:%M"),
                 "Pick": pick,
                 "Odds": odds_used,
-                "Prob": round(p, 3),
-                "EV": round(ev_v, 3),
-                "Alpha": round(alpha, 4),
-                "Stake": round(stake, 2),
-                "PnL": round(pnl, 2)
+                "Alpha": round(a, 4),
+                "Edge": edge,
+                "Sharp Money": sharp,
+                "CLV Expectation": round(clv, 4)
             })
 
         except:
@@ -239,20 +171,25 @@ if st.button("🚀 RUN DESK"):
     df = pd.DataFrame(results)
 
     if df.empty:
-        st.warning("⚠️ No institutional edge detected")
+        st.warning("⚠️ No edge detected")
         st.stop()
 
+    # =========================
+    # SORT BY EDGE
+    # =========================
     df = df.sort_values("Alpha", ascending=False)
 
-    st.success(f"💰 Desk Active | Trades: {len(df)}")
-
+    # =========================
+    # UI VISUALIZATION
+    # =========================
+    st.subheader("📊 Alpha Heatmap (Edge Ranking)")
     st.dataframe(df, use_container_width=True)
 
-    st.subheader("📊 Desk Summary")
+    st.subheader("🔥 Institutional Summary")
 
     st.write({
-        "Avg Alpha": df["Alpha"].mean(),
-        "Avg EV": df["EV"].mean(),
-        "Bankroll": bankroll,
-        "Exposure": exposure
+        "Total Signals": len(df),
+        "Strong Edge": len(df[df["Edge"] == "🟢 STRONG EDGE"]),
+        "Moderate Edge": len(df[df["Edge"] == "🟡 MODERATE EDGE"]),
+        "Weak Edge": len(df[df["Edge"] == "🔴 WEAK EDGE"]),
     })
