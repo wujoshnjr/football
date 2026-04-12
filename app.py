@@ -6,18 +6,27 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 # =========================
-# SAFETY
+# TIME (FIXED FOREVER)
 # =========================
-import pandas as _pd
-assert hasattr(_pd, "DataFrame")
-
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-SIMS = 20000
+def now_taipei():
+    return dt.datetime.now(TAIPEI)
+
+def to_taipei(ts):
+    try:
+        t = pd.to_datetime(ts)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        return t.tz_convert(TAIPEI)
+    except:
+        return None
 
 # =========================
-# GLOBAL LEAGUES
+# CONFIG
 # =========================
+SIMS = 20000
+
 SPORTS = [
     "soccer_epl",
     "soccer_uefa_champs_league",
@@ -32,12 +41,10 @@ SPORTS = [
 # FETCH
 # =========================
 def fetch_all():
-
     key = st.secrets["API_KEYS"]["ODDS_API"]
-    out = []
+    all_data = []
 
     for s in SPORTS:
-
         url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
 
         try:
@@ -55,15 +62,15 @@ def fetch_all():
             if isinstance(data, list):
                 for d in data:
                     d["league"] = s
-                out.extend(data)
+                all_data.extend(data)
 
         except:
             continue
 
-    return out
+    return all_data
 
 # =========================
-# 🧠 FORM
+# FORM + HISTORY
 # =========================
 def form():
     return np.clip(np.random.normal(0.5, 0.2), 0.1, 0.9)
@@ -71,82 +78,65 @@ def form():
 def h2h():
     return np.clip(np.random.normal(0.5, 0.15), 0.2, 0.8)
 
-# =========================
-# ⚽ BASE STRENGTH
-# =========================
-def base_strength():
-
-    lh = 1.5
-    la = 1.2
-
-    fh = form()
-    fa = form()
-
+def strength():
+    fh, fa = form(), form()
     bias = h2h()
 
-    return (
-        lh * (0.7 + fh * 0.6 + bias * 0.2),
-        la * (0.7 + fa * 0.6 + (1 - bias) * 0.2)
-    )
+    lh = 1.5 * (0.7 + fh * 0.6 + bias * 0.2)
+    la = 1.2 * (0.7 + fa * 0.6 + (1 - bias) * 0.2)
+
+    return max(0.2, lh), max(0.2, la)
 
 # =========================
-# 💣 UPSET ENGINE (NEW CORE)
+# UPSET MODEL
 # =========================
-def upset_probability(ph, pd, pa, odds_home, odds_draw, odds_away):
+def upset_factor(oh, od, oa):
+    avg = (oh + od + oa) / 3
+    fav = min(oh, oa)
 
-    # market imbalance (favorite trap)
-    fav = max(odds_home, odds_away)
-    imbalance = fav / np.mean([odds_home, odds_draw, odds_away])
+    imbalance = avg / fav
 
-    # high imbalance → more upset chance
-    upset_bias = min(0.25, (imbalance - 1) * 0.15)
-
-    # draw increases chaos
-    chaos = pd * 0.5
-
-    return upset_bias + chaos
+    return min(0.25, (imbalance - 1) * 0.2)
 
 # =========================
-# 🎲 MONTE CARLO WITH UPSET INJECTION
+# MONTE CARLO
 # =========================
 def simulate(lh, la, upset):
 
-    home = draw = away = 0
+    h = d = a = 0
 
     for _ in range(SIMS):
 
         hg = np.random.poisson(lh)
         ag = np.random.poisson(la)
 
-        # 💣 upset injection (random shock events)
+        # 💣 upset injection
         if np.random.rand() < upset:
-            hg, ag = ag, hg  # flip result (major upset)
+            hg, ag = ag, hg
 
         if hg > ag:
-            home += 1
+            h += 1
         elif hg == ag:
-            draw += 1
+            d += 1
         else:
-            away += 1
+            a += 1
 
-    return home/SIMS, draw/SIMS, away/SIMS
+    return h/SIMS, d/SIMS, a/SIMS
 
 # =========================
-# EV + KELLY
+# EV
 # =========================
 def EV(p, odds):
     return (p * (odds - 1)) - (1 - p)
 
 def kelly(ev, odds):
     b = odds - 1
-    if b <= 0:
-        return 0
-    return max(0, min(ev / b, 0.25))
+    return max(0, min(ev / b, 0.25)) if b > 0 else 0
 
 # =========================
 # APP
 # =========================
-st.title("🏦 HEDGE FUND CORE v5 (UPSET-AWARE MODEL)")
+st.title("🏦 FINAL FOOTBALL AI (TIME + UPSET + GLOBAL)")
 
 data = fetch_all()
 
@@ -157,6 +147,16 @@ for m in data:
     try:
         home = m.get("home_team")
         away = m.get("away_team")
+
+        kickoff_raw = m.get("commence_time")
+        k = to_taipei(kickoff_raw)
+
+        if k is None:
+            continue
+
+        # 🕒 24H FILTER (FIXED)
+        if not (now_taipei() <= k <= now_taipei() + dt.timedelta(hours=24)):
+            continue
 
         books = m.get("bookmakers", [])
         if not books:
@@ -170,66 +170,48 @@ for m in data:
         od = float(outs[1]["price"])
         oa = float(outs[2]["price"])
 
-        # =========================
-        # MODEL BASE
-        # =========================
-        lh, la = base_strength()
+        # MODEL
+        lh, la = strength()
+        upset = upset_factor(oh, od, oa)
 
-        # baseline probabilities
-        ph = 0.45
-        pd = 0.25
-        pa = 0.30
-
-        # 💣 upset probability engine
-        upset = upset_probability(ph, pd, pa, oh, od, oa)
-
-        # 🎲 simulate with upset risk
         ph, pd, pa = simulate(lh, la, upset)
 
-        ev_map = {
+        evs = {
             "HOME": EV(ph, oh),
             "DRAW": EV(pd, od),
             "AWAY": EV(pa, oa)
         }
 
-        pick = max(ev_map, key=ev_map.get)
+        pick = max(evs, key=evs.get)
+        ev = evs[pick]
 
         odds = {"HOME": oh, "DRAW": od, "AWAY": oa}[pick]
-
-        ev = ev_map[pick]
 
         stake = kelly(ev, odds) * 100000
 
         results.append({
+            "league": m.get("league"),
             "match": f"{home} vs {away}",
+            "kickoff (Taipei)": k.strftime("%Y-%m-%d %H:%M"),
             "pick": pick,
-            "P_home": ph,
-            "P_draw": pd,
-            "P_away": pa,
-            "UPSET_RISK": upset,
-            "EV": ev,
+            "EV": round(ev, 4),
             "odds": odds,
-            "stake": stake
+            "stake": round(stake, 2),
+            "UPSET": round(upset, 3)
         })
 
     except:
         continue
 
-# =========================
-# OUTPUT
-# =========================
-df = _pd.DataFrame.from_records(results)
+df = pd.DataFrame(results)
 
 if df.empty:
-    st.warning("No signals")
-    st.stop()
+    st.warning("24小時內沒有符合條件的比賽")
+else:
+    df = df.sort_values("EV", ascending=False)
 
-df = df.sort_values("EV", ascending=False)
+    st.subheader("🕒 24小時內比賽（台北時間）")
+    st.dataframe(df)
 
-st.subheader("🌍 UPSET-AWARE SIGNALS (GLOBAL)")
-st.dataframe(df)
-
-st.metric("Signals", len(df))
-st.metric("Avg EV", round(df["EV"].mean(), 4))
-
-st.success("UPSET-AWARE HEDGE FUND CORE ACTIVE ✔")
+    st.metric("場數", len(df))
+    st.metric("平均EV", round(df["EV"].mean(), 4))
