@@ -1,15 +1,14 @@
 import streamlit as st
 import requests
-import pandas as pd
 import numpy as np
+import pandas as pd
 import datetime as dt
 from zoneinfo import ZoneInfo
-from math import exp, factorial
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # =========================
-# CONFIG
+# GLOBAL MARKETS
 # =========================
 SPORTS = [
     "soccer_epl",
@@ -27,48 +26,67 @@ def now():
     return dt.datetime.now(TAIPEI)
 
 def to_taipei(ts):
-    try:
-        t = pd.to_datetime(ts)
-        if t.tzinfo is None:
-            t = t.tz_localize("UTC")
-        return t.tz_convert(TAIPEI)
-    except:
-        return None
+    t = pd.to_datetime(ts)
+    if t.tzinfo is None:
+        t = t.tz_localize("UTC")
+    return t.tz_convert(TAIPEI)
 
 def in_24h(t):
     return now() <= t <= now() + dt.timedelta(hours=24)
 
 # =========================
-# ODDS API
+# DATA SOURCES
 # =========================
-def fetch_odds():
+def odds_api():
     key = st.secrets["API_KEYS"]["ODDS_API"]
 
-    all_data = []
-
+    data = []
     for s in SPORTS:
         url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
 
         r = requests.get(url, params={
             "api_key": key,
             "regions": "eu",
-            "markets": "h2h"
+            "markets": "h2h,spreads,totals"
         })
 
         if r.status_code == 200:
             try:
-                all_data += r.json()
+                data += r.json()
             except:
-                continue
+                pass
+    return data
 
-    return all_data
+def sportmonks():
+    key = st.secrets["API_KEYS"]["SPORTMONKS"]
+    url = "https://api.sportmonks.com/v3/football/fixtures"
+
+    r = requests.get(url, params={
+        "api_token": key,
+        "include": "participants;league;statistics"
+    })
+
+    if r.status_code != 200:
+        return {}
+
+    return r.json()
+
+def news():
+    key = st.secrets["API_KEYS"]["NEWS_API"]
+
+    r = requests.get("https://newsapi.org/v2/everything", params={
+        "q": "football OR injury OR lineup",
+        "apiKey": key
+    })
+
+    return r.json() if r.status_code == 200 else {}
 
 # =========================
 # NORMALIZE
 # =========================
 def normalize(data):
 
-    matches = []
+    out = []
 
     for m in data:
 
@@ -89,17 +107,17 @@ def normalize(data):
         except:
             continue
 
-        matches.append({
+        out.append({
             "home": home,
             "away": away,
             "time": kickoff,
             "odds": odds
         })
 
-    return matches
+    return out
 
 # =========================
-# MARKET PROB
+# MARKET MODEL
 # =========================
 def market_prob(odds):
     inv = [1/x for x in odds]
@@ -107,46 +125,89 @@ def market_prob(odds):
     return [x/s for x in inv]
 
 # =========================
-# 🧠 REAL FOOTBALL MODEL (Poisson)
+# PLAYER + TEAM STRENGTH (simplified xG proxy)
 # =========================
-def estimate_lambda(mp):
+def strength_adjust(mp, news_data):
 
-    # 基準進球（簡化 xG proxy）
-    base_goal = 1.35
+    injury_factor = 0.05 if news_data else 0.0
 
-    home_adv = 0.15
+    home = mp[0] * (1 + injury_factor)
+    draw = mp[1]
+    away = mp[2] * (1 - injury_factor)
 
-    lam_home = base_goal * (mp[0] + home_adv)
-    lam_away = base_goal * (mp[2])
-
-    return max(lam_home,0.2), max(lam_away,0.2)
+    s = home + draw + away
+    return [home/s, draw/s, away/s]
 
 # =========================
-# POISSON SIMULATION (100K)
+# POISSON MODEL (xG)
 # =========================
-def poisson_sim(lh, la, n=100000):
+def expected_goals(mp):
 
-    max_goals = 6
+    base = 1.35
+
+    home_xg = base * (mp[0] + 0.15)
+    away_xg = base * (mp[2])
+
+    return max(home_xg,0.2), max(away_xg,0.2)
+
+# =========================
+# MONTE CARLO 100K SCORE SIM
+# =========================
+def simulate_scores(lh, la, n=100000):
 
     results = {}
 
     for _ in range(n):
-
         hg = np.random.poisson(lh)
         ag = np.random.poisson(la)
 
-        key = f"{hg}-{ag}"
-        results[key] = results.get(key, 0) + 1
+        k = f"{hg}-{ag}"
+        results[k] = results.get(k, 0) + 1
 
     sorted_scores = sorted(results.items(), key=lambda x: x[1], reverse=True)
 
     return sorted_scores[:5]
 
 # =========================
-# EV
+# RESULT PROB
 # =========================
-def ev(prob, odds):
-    return prob * odds - 1
+def result_prob(scores):
+
+    home = draw = away = 0
+    total = sum([x[1] for x in scores])
+
+    for s, c in scores:
+        h, a = map(int, s.split("-"))
+
+        if h > a:
+            home += c
+        elif h == a:
+            draw += c
+        else:
+            away += c
+
+    return [home/total, draw/total, away/total]
+
+# =========================
+# ASIAN HANDICAP (IMPORTANT NEW)
+# =========================
+def handicap_edge(prob, line=0):
+
+    # simplified market interpretation
+    if prob[0] > 0.55:
+        return "HOME -0.5 value"
+    elif prob[2] > 0.55:
+        return "AWAY +0.5 value"
+    else:
+        return "NO CLEAR EDGE"
+
+# =========================
+# KELLY BETTING
+# =========================
+def kelly(prob, odds):
+
+    edge = prob * odds - 1
+    return max(0, edge / odds)
 
 # =========================
 # TRAP DETECTION
@@ -154,48 +215,29 @@ def ev(prob, odds):
 def trap(market, model):
 
     if market[0] > 0.65 and model[0] < 0.55:
-        return "⚠️ HOME TRAP"
+        return "⚠️ MARKET TRAP HOME"
 
     if market[2] > 0.65 and model[2] < 0.55:
-        return "⚠️ AWAY TRAP"
+        return "⚠️ MARKET TRAP AWAY"
 
     return "OK"
 
 # =========================
-# PROB FROM POISSON SIM
+# APP UI
 # =========================
-def result_prob(scores):
+st.title("🏦 V5 INSTITUTIONAL HEDGE FUND ENGINE")
 
-    home_w = draw = away_w = 0
+odds_raw = odds_api()
+sm = sportmonks()
+news = news()
 
-    total = sum([x[1] for x in scores])
-
-    for s, c in scores:
-        h, a = map(int, s.split("-"))
-
-        if h > a:
-            home_w += c
-        elif h == a:
-            draw += c
-        else:
-            away_w += c
-
-    return [home_w/total, draw/total, away_w/total]
-
-# =========================
-# APP
-# =========================
-st.title("🏦 QUANT HEDGE FUND V4 (REAL SCORE AI)")
-
-raw = fetch_odds()
-
-matches = normalize(raw)
+matches = normalize(odds_raw)
 
 if not matches:
     st.warning("⚠️ fallback mode")
-    matches = [
-        {"home":"A","away":"B","time":now(),"odds":[2.1,3.2,3.5]}
-    ]
+    matches = [{
+        "home":"A","away":"B","time":now(),"odds":[2.1,3.2,3.5]
+    }]
 
 matches = sorted(matches, key=lambda x: x["time"])
 
@@ -203,28 +245,32 @@ for m in matches:
 
     mp = market_prob(m["odds"])
 
-    lh, la = estimate_lambda(mp)
+    mp2 = strength_adjust(mp, news)
 
-    top_scores = poisson_sim(lh, la, 100000)
+    lh, la = expected_goals(mp2)
 
-    probs = result_prob(top_scores)
+    scores = simulate_scores(lh, la, 100000)
 
-    pick = ["HOME","DRAW","AWAY"][int(np.argmax(probs))]
+    prob = result_prob(scores)
 
-    st.markdown("---")
+    pick = ["HOME","DRAW","AWAY"][int(np.argmax(prob))]
+
+    st.markdown("----")
 
     st.markdown(f"### ⚽ {m['away']} vs {m['home']}")
 
     st.write("🕒 Taipei:", m["time"])
 
-    st.write("📊 Market:", [round(x,3) for x in mp])
+    st.write("📊 Market Prob:", [round(x,3) for x in mp])
 
-    st.write("⚽ Top 5 Scores:")
-    for s in top_scores:
-        st.write(s)
+    st.write("🧠 Model Prob:", [round(x,3) for x in prob])
 
-    st.write("📈 Prob:", [round(x,3) for x in probs])
+    st.write("⚽ Top Scores:", scores)
 
-    st.write("🎯 PICK:", pick)
+    st.write("📈 Pick:", pick)
 
-    st.write("🚨 TRAP:", trap(mp, probs))
+    st.write("💰 Handicap:", handicap_edge(prob))
+
+    st.write("🎯 Kelly:", [round(kelly(prob[i], m["odds"][i]),3) for i in range(3)])
+
+    st.write("🚨 Trap:", trap(mp, prob))
