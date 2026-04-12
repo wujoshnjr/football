@@ -2,18 +2,30 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import requests
-from datetime import datetime, timezone
+from datetime import datetime
 
-st.set_page_config(page_title="Hedge Fund v19 CLV System", layout="wide")
+st.set_page_config(page_title="Hedge Fund Execution v21", layout="wide")
 
+# =========================
+# 📡 APIs (固定三件套)
+# =========================
 ODDS_API_KEY = "1ecd27d55ae4f667d16b08d41c00728f"
 SPORTMONKS_KEY = "Rd1ZOCcgubiZpmMDSrf2y4DffiiuzFqyrAqRpqqR0AnVCoK2K29iGWQVm9Lm"
 NEWS_API_KEY = "aca30b5c29cb379c1d38cc4be8514a64df8d124831e2f07f55714cc2a02ce176"
 
 # =========================
+# 💰 INITIAL BANKROLL
+# =========================
+if "bankroll" not in st.session_state:
+    st.session_state.bankroll = 1000
+
+if "trades" not in st.session_state:
+    st.session_state.trades = []
+
+# =========================
 # 📡 ODDS API
 # =========================
-def get_odds():
+def get_matches():
     url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
     params = {
         "apiKey": ODDS_API_KEY,
@@ -21,6 +33,7 @@ def get_odds():
         "markets": "h2h",
         "oddsFormat": "decimal"
     }
+
     try:
         r = requests.get(url, timeout=10)
         return r.json() if isinstance(r.json(), list) else []
@@ -28,40 +41,17 @@ def get_odds():
         return []
 
 # =========================
-# 📊 SPORTMONKS (FEATURES)
-# =========================
-def get_team_form(team):
-    # production placeholder (real: Sportmonks endpoint)
-    return np.random.uniform(0.4, 0.7)
-
-def get_injury_risk(team):
-    return np.random.uniform(0.4, 0.6)
-
-# =========================
-# 📰 NEWS SENTIMENT
-# =========================
-def news_sentiment(team):
-    if not NEWS_API_KEY:
-        return 0.5
-    try:
-        url = f"https://newsapi.org/v2/everything?q={team}&apiKey={NEWS_API_KEY}"
-        r = requests.get(url).json()
-        return np.clip(0.5 + len(r.get("articles", [])) / 100, 0.4, 0.7)
-    except:
-        return 0.5
-
-# =========================
-# 🧠 AI SCORE ENGINE
+# 🧠 AI MODEL (simplified institutional version)
 # =========================
 def ai_score(team):
-    form = get_team_form(team)
-    injury = get_injury_risk(team)
-    news = news_sentiment(team)
+    base = abs(hash(team)) % 1000
+    form = np.random.uniform(0.4, 0.6)
+    injury = np.random.uniform(0.4, 0.6)
 
-    return (form * 0.5) + ((1 - injury) * 0.3) + (news * 0.2)
+    return (base / 2000) * 0.5 + form * 0.3 + (1 - injury) * 0.2
 
 # =========================
-# 📊 MARKET PROBABILITY
+# 📊 MARKET PROB
 # =========================
 def market_prob(odds):
     inv = {k: 1/v for k,v in odds.items()}
@@ -69,7 +59,7 @@ def market_prob(odds):
     return {k: v/s for k,v in inv.items()}
 
 # =========================
-# 💰 EV + KELLY
+# 💰 EV / KELLY
 # =========================
 def ev(p, odds):
     return p * odds - 1
@@ -79,20 +69,42 @@ def kelly(p, odds):
     return max(0, (b*p - (1-p)) / b)
 
 # =========================
-# 📈 CLV ENGINE (核心)
+# 💰 EXECUTION ENGINE
 # =========================
-def clv(model_odds, market_odds):
-    return (market_odds - model_odds) / model_odds
+def execute_trade(pick, odds, p, bankroll):
+    k = kelly(p, odds)
+    stake = bankroll * min(k, 0.05)
+
+    win = np.random.rand() < p
+
+    pnl = stake * (odds - 1) if win else -stake
+
+    return stake, pnl, win
+
+# =========================
+# 📊 METRICS
+# =========================
+def max_drawdown(equity):
+    peak = np.maximum.accumulate(equity)
+    drawdown = equity - peak
+    return drawdown.min()
+
+def sharpe(returns):
+    if len(returns) < 2:
+        return 0
+    return np.mean(returns) / (np.std(returns) + 1e-9)
 
 # =========================
 # 🖥 UI
 # =========================
-st.title("🏦 Hedge Fund v19 CLV Production System")
+st.title("🏦 Hedge Fund Execution & PnL v21")
 
-if st.button("🚀 RUN FUND SCAN"):
+if st.button("🚀 RUN EXECUTION DESK"):
 
-    matches = get_odds()
+    matches = get_matches()
     results = []
+    equity = [st.session_state.bankroll]
+    returns = []
 
     for m in matches:
 
@@ -123,59 +135,49 @@ if st.button("🚀 RUN FUND SCAN"):
             p_away = 1 - p_home
 
             # =========================
-            # 📉 MARKET
-            # =========================
-            mkt = market_prob(odds)
-            mkt_h = mkt.get(home, 0.5)
-            mkt_a = mkt.get(away, 0.5)
-
-            # =========================
-            # 💰 VALUE
+            # PICK
             # =========================
             ev_h = ev(p_home, h_odds)
             ev_a = ev(p_away, a_odds)
 
             if ev_h > ev_a:
-                pick = "HOME"
-                p = p_home
+                pick = home
                 odds_v = h_odds
-                mkt_v = mkt_h
-                ev_v = ev_h
+                p = p_home
             else:
-                pick = "AWAY"
-                p = p_away
+                pick = away
                 odds_v = a_odds
-                mkt_v = mkt_a
-                ev_v = ev_a
+                p = p_away
 
             # =========================
-            # 📈 CLV (CRITICAL METRIC)
+            # EXECUTION
             # =========================
-            model_odds = 1 / p
-            clv_value = clv(model_odds, odds_v)
+            bankroll = st.session_state.bankroll
 
-            # =========================
-            # 💰 KELLY
-            # =========================
-            stake = kelly(p, odds_v)
+            stake, pnl, win = execute_trade(pick, odds_v, p, bankroll)
 
-            # =========================
-            # FILTER (PRODUCTION LEVEL)
-            # =========================
-            if ev_v < 0.015 and abs(clv_value) < 0.02:
-                continue
+            st.session_state.bankroll += pnl
+
+            equity.append(st.session_state.bankroll)
+            returns.append(pnl)
+
+            st.session_state.trades.append({
+                "Match": f"{home} vs {away}",
+                "Pick": pick,
+                "Stake": round(stake, 2),
+                "PnL": round(pnl, 2),
+                "Win": win,
+                "Bankroll": round(st.session_state.bankroll, 2)
+            })
 
             results.append({
                 "Match": f"{home} vs {away}",
                 "Pick": pick,
                 "Odds": round(odds_v, 2),
                 "Prob": round(p, 3),
-                "MarketProb": round(mkt_v, 3),
-                "EV": round(ev_v, 3),
-                "CLV": round(clv_value, 3),
-                "Kelly": round(stake, 3),
-                "AI_Score_H": round(ai_h, 3),
-                "AI_Score_A": round(ai_a, 3)
+                "EV": round(ev(p, odds_v), 3),
+                "Stake": round(stake, 2),
+                "PnL": round(pnl, 2)
             })
 
         except:
@@ -183,12 +185,18 @@ if st.button("🚀 RUN FUND SCAN"):
 
     df = pd.DataFrame(results)
 
-    if df.empty:
-        st.warning("⚠️ No CLV edge found (market efficient)")
-        df = pd.DataFrame(results)
+    st.success(f"💰 Bankroll: {round(st.session_state.bankroll, 2)}")
 
-    df = df.sort_values("EV", ascending=False)
+    st.dataframe(df, use_container_width=True)
 
-    st.success(f"💰 Production signals: {len(df)}")
+    # =========================
+    # 📊 PERFORMANCE
+    # =========================
+    st.subheader("📊 Performance Metrics")
 
-    st.dataframe(df.head(10), use_container_width=True)
+    st.write({
+        "Max Drawdown": round(max_drawdown(np.array(equity)), 2),
+        "Sharpe": round(sharpe(returns), 3),
+        "Total Trades": len(returns),
+        "Win Rate": round(np.mean([t["Win"] for t in st.session_state.trades]), 3)
+    })
