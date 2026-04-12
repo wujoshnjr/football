@@ -1,12 +1,16 @@
 import streamlit as st
 import requests
+import pandas as pd
+import numpy as np
 import datetime as dt
 from zoneinfo import ZoneInfo
-import pandas as pd
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-SPORTS = [
+# =========================
+# CONFIG
+# =========================
+ODDS_LEAGUES = [
     "soccer_epl",
     "soccer_spain_la_liga",
     "soccer_italy_serie_a",
@@ -18,6 +22,9 @@ SPORTS = [
 # =========================
 # TIME
 # =========================
+def now():
+    return dt.datetime.now(TAIPEI)
+
 def to_taipei(ts):
     try:
         t = pd.to_datetime(ts)
@@ -28,103 +35,163 @@ def to_taipei(ts):
         return None
 
 def in_24h(t):
-    now = dt.datetime.now(TAIPEI)
-    return now <= t <= now + dt.timedelta(hours=24)
+    n = now()
+    return n <= t <= n + dt.timedelta(hours=24)
 
 # =========================
-# API TEST (CRITICAL FIX)
+# 1️⃣ ODDS API
 # =========================
-def test_api_key(key):
+def get_odds():
+    key = st.secrets["API_KEYS"].get("ODDS_API")
+
     url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
 
     r = requests.get(url, params={
         "api_key": key,
         "regions": "eu",
-        "markets": "h2h",
-        "oddsFormat": "decimal"
+        "markets": "h2h"
     })
 
-    return r.status_code, r.text[:200]
+    if r.status_code == 401:
+        st.error("❌ ODDS API QUOTA / KEY ERROR")
+        return []
+
+    if r.status_code != 200:
+        st.error("❌ ODDS API FAIL")
+        return []
+
+    return r.json()
 
 # =========================
-# FETCH
+# 2️⃣ SPORTMONKS (truth layer)
 # =========================
-def fetch_all():
-    key = st.secrets["API_KEYS"].get("ODDS_API")
+def get_sportmonks():
+    key = st.secrets["API_KEYS"].get("SPORTMONKS")
 
     if not key:
-        st.error("❌ API KEY missing")
-        return []
+        return {}
 
-    # 🔥 DEBUG KEY STATUS
-    status, text = test_api_key(key)
-    st.write("🔑 API TEST STATUS:", status)
-    st.write(text)
+    url = "https://api.sportmonks.com/v3/football/fixtures"
 
-    if status == 401:
-        st.error("❌ API KEY INVALID (401) → fix key first")
-        return []
+    r = requests.get(url, params={
+        "api_token": key,
+        "include": "participants;league"
+    })
 
-    all_matches = []
+    if r.status_code != 200:
+        return {}
 
-    for s in SPORTS:
+    return r.json()
 
-        url = f"https://api.the-odds-api.com/v4/sports/{s}/odds"
+# =========================
+# 3️⃣ NEWS API
+# =========================
+def get_news():
+    key = st.secrets["API_KEYS"].get("NEWS_API")
 
-        r = requests.get(url, params={
-            "api_key": key,
-            "regions": "eu",
-            "markets": "h2h",
-            "oddsFormat": "decimal"
+    if not key:
+        return {}
+
+    url = "https://newsapi.org/v2/everything"
+
+    r = requests.get(url, params={
+        "q": "football",
+        "apiKey": key
+    })
+
+    if r.status_code != 200:
+        return {}
+
+    return r.json()
+
+# =========================
+# MERGE ENGINE
+# =========================
+def merge_data(odds):
+    matches = []
+
+    for m in odds:
+
+        if not m.get("bookmakers"):
+            continue
+
+        kickoff = to_taipei(m.get("commence_time"))
+        if not kickoff:
+            continue
+
+        if not in_24h(kickoff):
+            continue
+
+        matches.append({
+            "home": m["home_team"],
+            "away": m["away_team"],
+            "time": kickoff,
+            "odds": m["bookmakers"][0]["markets"][0]["outcomes"]
         })
 
-        # 🔥 SHOW ERROR INSTEAD OF SILENT FAIL
-        if r.status_code != 200:
-            st.warning(f"{s} failed: {r.status_code}")
-            continue
+    return matches
 
-        data = r.json()
+# =========================
+# MODEL
+# =========================
+def probs(odds):
+    try:
+        p = [1/o["price"] for o in odds]
+        s = sum(p)
+        return [x/s for x in p]
+    except:
+        return [0.33, 0.33, 0.34]
 
-        if not data:
-            st.warning(f"{s} empty")
-            continue
+def pick(p):
+    return ["HOME","DRAW","AWAY"][int(np.argmax(p))]
 
-        for m in data:
-
-            if not m.get("bookmakers"):
-                continue
-
-            kickoff = to_taipei(m.get("commence_time"))
-            if not kickoff:
-                continue
-
-            if not in_24h(kickoff):
-                continue
-
-            all_matches.append({
-                "home": m["home_team"],
-                "away": m["away_team"],
-                "time": kickoff,
-                "league": s
-            })
-
-    return all_matches
+def score(pick):
+    if pick == "HOME":
+        return (2,1)
+    if pick == "AWAY":
+        return (1,2)
+    return (1,1)
 
 # =========================
 # APP
 # =========================
-st.title("🚑 FIXED GLOBAL FOOTBALL ENGINE (DEBUG VERSION)")
+st.title("🏦 GLOBAL FOOTBALL QUANT SYSTEM vFINAL")
 
-matches = fetch_all()
+# LOAD DATA
+odds = get_odds()
+sportmonks = get_sportmonks()
+news = get_news()
 
-st.write("📊 TOTAL MATCHES:", len(matches))
+matches = merge_data(odds)
 
-if not matches:
-    st.error("❌ NO MATCHES → API KEY OR PLAN ISSUE OR ENDPOINT ISSUE")
+st.write("📊 MATCHES:", len(matches))
+
+if len(matches) == 0:
+    st.error("❌ NO MATCHES (API OR QUOTA ISSUE)")
     st.stop()
 
+results = []
+
 for m in matches:
-    st.write("━━━━━━━━━━━━━━")
-    st.write(f"{m['away']} vs {m['home']}")
-    st.write(m["league"])
-    st.write(m["time"])
+
+    p = probs(m["odds"])
+    pk = pick(p)
+
+    results.append({
+        "match": f"{m['away']} vs {m['home']}",
+        "time": m["time"],
+        "pick": pk,
+        "score": score(pk),
+        "prob": p
+    })
+
+# =========================
+# OUTPUT
+# =========================
+for r in sorted(results, key=lambda x: x["time"]):
+
+    st.markdown("---")
+    st.write(f"⚽ {r['match']}")
+    st.write(f"🕒 {r['time']}")
+    st.write(f"🎯 PICK: {r['pick']}")
+    st.write(f"⚽ SCORE: {r['score']}")
