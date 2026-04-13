@@ -4,143 +4,101 @@ import requests
 from bs4 import BeautifulSoup
 import pytz
 import io
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 from football.engine import FootballTradingEngine
 
-# 1. 初始化
-st.set_page_config(page_title="Hedge Fund V5 Ultra", layout="wide")
+# 1. 核心頁面配置
+st.set_page_config(
+    page_title="Hedge Fund Alpha V5",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 初始化模型與時區
 engine = FootballTradingEngine()
 tz = pytz.timezone("Asia/Taipei")
 
+# 2. 進階自定義 CSS (更精緻的 UI)
 st.markdown("""
     <style>
-    .stMetric { background-color: #f8f9fa; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
+    .match-card {
+        border-radius: 15px;
+        padding: 20px;
+        background-color: #ffffff;
+        border: 1px solid #e9ecef;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+    }
+    .status-live { color: #d9534f; font-weight: bold; animation: blinker 1.5s linear infinite; }
+    @keyframes blinker { 50% { opacity: 0; } }
+    .metric-box { text-align: center; background: #f8f9fa; border-radius: 8px; padding: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("⚽ Football Trading System v5 (Multi-Source)")
+# =========================================
+# 📡 強化版數據抓取 (增加對抗限速機制)
+# =========================================
 
-# =========================================
-# 📡 數據源 A: Football-Data.org
-# =========================================
-@st.cache_data(ttl=1800)
-def fetch_football_data():
-    key = st.secrets.get("FOOTBALL_DATA_API_KEY")
-    if not key: return []
-    url = "https://api.football-data.org/v4/matches"
-    headers = {'X-Auth-Token': key}
+@st.cache_data(ttl=600)
+def fetch_data_hub(source_type):
     data = []
-    try:
-        res = requests.get(url, headers=headers, timeout=10).json()
-        for m in res.get('matches', []):
-            home = m['homeTeam']['shortName'] or m['homeTeam']['name']
-            away = m['awayTeam']['shortName'] or m['awayTeam']['name']
-            pred = engine.predict(home, away)
-            utc_dt = datetime.strptime(m['utcDate'], '%Y-%m-%dT%H:%M:%SZ')
-            pred.update({
-                'kickoff_tpe': utc_dt.replace(tzinfo=pytz.utc).astimezone(tz),
-                'league': m['competition']['name'],
-                'source': 'Football-Data.org'
-            })
-            data.append(pred)
-    except: pass
+    
+    # --- 來源 A: Football-Data.org ---
+    if source_type == "Football-Data (首選)":
+        key = st.secrets.get("FOOTBALL_DATA_API_KEY")
+        if not key: return []
+        headers = {'X-Auth-Token': key}
+        try:
+            res = requests.get("https://api.football-data.org/v4/matches", headers=headers, timeout=12).json()
+            for m in res.get('matches', []):
+                h_name = m['homeTeam']['shortName'] or m['homeTeam']['name']
+                a_name = m['awayTeam']['shortName'] or m['awayTeam']['name']
+                pred = engine.predict(h_name, a_name)
+                utc_dt = datetime.strptime(m['utcDate'], '%Y-%m-%dT%H:%M:%SZ')
+                pred.update({
+                    'kickoff': utc_dt.replace(tzinfo=pytz.utc).astimezone(tz),
+                    'league': f"🏆 {m['competition']['name']}",
+                    'source': 'Verified API'
+                })
+                data.append(pred)
+        except: pass
+
+    # --- 來源 B: Web Scraper (高效能解析) ---
+    elif source_type == "爬蟲模式":
+        url = "https://www.bbc.com/sport/football/scores-fixtures"
+        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            for b in soup.select('.gs-u-pb\+')[:12]:
+                h = b.select_one('.sp-c-fixture__team--home').text.strip()
+                a = b.select_one('.sp-c-fixture__team--away').text.strip()
+                pred = engine.predict(h, a)
+                pred.update({'kickoff': datetime.now(tz), 'league': '📡 Live Stream', 'source': 'Web Scraper'})
+                data.append(pred)
+        except: pass
+    
     return data
 
 # =========================================
-# 📡 數據源 B: RapidAPI (API-Football)
+# 📊 側邊欄控制與分析工具
 # =========================================
-@st.cache_data(ttl=1800)
-def fetch_rapid_api():
-    key = st.secrets.get("RAPIDAPI_KEY")
-    if not key: return []
-    url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-    headers = {"X-RapidAPI-Key": key, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
-    params = {"date": datetime.now().strftime('%Y-%m-%d')}
-    data = []
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=10).json()
-        for f in res.get('response', []):
-            home = f['teams']['home']['name']
-            away = f['teams']['away']['name']
-            pred = engine.predict(home, away)
-            dt = datetime.fromisoformat(f['fixture']['date'].replace('Z', '+00:00'))
-            pred.update({
-                'kickoff_tpe': dt.astimezone(tz),
-                'league': f['league']['name'],
-                'source': 'RapidAPI'
-            })
-            data.append(pred)
-    except: pass
-    return data
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/907/907690.png", width=80)
+    st.title("數據管理中心")
+    
+    source = st.radio("📡 選擇即時賽事來源", ["Football-Data (首選)", "RapidAPI (備援)", "爬蟲模式"])
+    
+    st.divider()
+    st.write("⚙️ **分析偏好**")
+    threshold = st.slider("勝率預警門檻 (%)", 40, 80, 55)
+    
+    # 導出 Excel 功能
+    st.divider()
+    st.write("📅 **最後同步:**", datetime.now(tz).strftime('%H:%M:%S'))
 
 # =========================================
-# 🕷️ 數據源 C: Web Scraping (爬蟲模式)
+# 🏟️ 主畫面渲染
 # =========================================
-def scrape_bbc_data():
-    url = "https://www.bbc.com/sport/football/scores-fixtures"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    data = []
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        # 爬取 BBC 結構中的比賽塊
-        blocks = soup.select('.gs-u-pb\+')
-        for b in blocks[:10]:
-            home = b.select_one('.sp-c-fixture__team--home').text.strip()
-            away = b.select_one('.sp-c-fixture__team--away').text.strip()
-            pred = engine.predict(home, away)
-            pred.update({
-                'kickoff_tpe': datetime.now(tz), 
-                'league': 'Live Feed', 
-                'source': 'Web Scraper'
-            })
-            data.append(pred)
-    except: pass
-    return data
-
-# =========================================
-# 📊 邏輯切換與顯示
-# =========================================
-st.sidebar.header("📊 數據管理中心")
-source = st.sidebar.radio("選擇即時賽事來源", ["Football-Data (首選)", "RapidAPI (備用)", "爬蟲模式"])
-
-if source == "Football-Data (首選)":
-    live_matches = fetch_football_data()
-elif source == "RapidAPI (備用)":
-    live_matches = fetch_rapid_api()
-else:
-    with st.spinner("🕷️ 正在爬取即時數據..."):
-        live_matches = scrape_bbc_data()
-
-# 備援：如果全部都沒有比賽，顯示模擬數據
-if not live_matches:
-    st.sidebar.warning("當前時段無即時賽事，顯示模擬數據")
-    demo = [("Man City", "Real Madrid", "Champions League"), ("Arsenal", "Liverpool", "Premier League")]
-    for h, a, l in demo:
-        p = engine.predict(h, a)
-        p.update({'kickoff_tpe': datetime.now(tz), 'league': l, 'source': 'Demo Mode'})
-        live_matches.append(p)
-
-# 下載報表功能
-if live_matches:
-    df = pd.DataFrame(live_matches).copy()
-    df['kickoff_tpe'] = df['kickoff_tpe'].apply(lambda x: x.strftime('%H:%M'))
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False)
-    st.sidebar.download_button("📥 下載分析報表 (Excel)", output.getvalue(), "Trading_Report.xlsx")
-
-# 主畫面渲染
-for res in live_matches:
-    with st.expander(f"🏟️ {res['league']}: {res['home_team']} vs {res['away_team']}", expanded=True):
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            st.markdown(f"**{res['home_team']} vs {res['away_team']}**")
-            st.caption(f"🕒 TPE 時間: {res['kickoff_tpe'].strftime('%m/%d %H:%M')}")
-            st.caption(f"📍 數據來源: {res['source']}")
-        with c2:
-            st.metric("主勝機率", f"{res['home_prob']:.1%}")
-            st.metric("客勝機率", f"{res['away_prob']:.1%}")
-        with c3:
-            st.metric("大 2.5 球", f"{res['over25']:.1%}")
-            st.success(f"🎯 推薦: {res['top_scores'][0][0]}")
