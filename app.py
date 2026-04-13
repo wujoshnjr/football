@@ -6,17 +6,25 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🔑 1. 初始化資料庫 (新增開賽時間欄位)
+# 🔑 1. 初始化與相容性修復 (修正 DatabaseError)
 # ==========================================
 def init_db():
     conn = sqlite3.connect('zeus_data.db', check_same_thread=False)
     c = conn.cursor()
-    # 增加 start_time 欄位以記錄比賽具體時間
+    # 建立基礎表格
     c.execute('''CREATE TABLE IF NOT EXISTS matches 
                  (match_id TEXT PRIMARY KEY, league TEXT, home TEXT, away TEXT, 
                   prediction TEXT, result TEXT, status TEXT, 
                   timestamp TEXT, start_time TEXT)''')
-    conn.commit()
+    
+    # 【關鍵修復】：檢查是否存在 start_time 欄位，若無則新增 (針對舊資料庫遷移)
+    try:
+        c.execute("SELECT start_time FROM matches LIMIT 1")
+    except sqlite3.OperationalError:
+        st.info("🔄 偵測到舊版資料庫，正在升級結構...")
+        c.execute("ALTER TABLE matches ADD COLUMN start_time TEXT")
+        conn.commit()
+        
     conn.close()
 
 init_db()
@@ -36,7 +44,7 @@ LEAGUE_BIAS = {
 # ==========================================
 # 🎨 3. UI 視覺樣式配置
 # ==========================================
-st.set_page_config(page_title="ZEUS PRO v46.0", layout="wide")
+st.set_page_config(page_title="ZEUS PRO v46.1", layout="wide")
 
 st.markdown("""
 <style>
@@ -78,86 +86,69 @@ def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
     return hp, dp, ap, ov25, he, de, ae, recs, bias, scores
 
 # ==========================================
-# 🖥️ 5. 實戰主流程 (加入時間處理邏輯)
+# 🖥️ 5. 實戰主流程
 # ==========================================
 def main():
-    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v46.0</h1>", unsafe_allow_html=True)
-    
-    API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
+    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v46.1</h1>", unsafe_allow_html=True)
     
     try:
+        API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
         data = requests.get(API_URL).json()
-    except:
-        st.error("API 連線失敗")
+    except Exception as e:
+        st.error(f"❌ API 獲取失敗: {e}")
         return
 
     tab1, tab2, tab3, tab4 = st.tabs(["🎯 實戰預測中心", "🎲 模擬波膽庫", "📚 歷史紀錄與檢討", "⚙️ 聯賽診斷庫"])
 
     with tab1:
-        if not data: st.warning("目前無賽事數據")
-        for m in data[:15]:
-            try:
-                # 處理開賽時間 (UTC 轉在地時間 +8)
-                commence_time = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)
-                time_str = commence_time.strftime("%m/%d %H:%M")
+        if not data or not isinstance(data, list):
+            st.warning("⚠️ 目前 API 沒有回傳賽事數據。")
+        else:
+            for m in data[:15]:
+                try:
+                    commence_time = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)
+                    time_str = commence_time.strftime("%m/%d %H:%M")
+                    market = m['bookmakers'][0]['markets'][0]['outcomes']
+                    h_o = next(o['price'] for o in market if o['name'] == m['home_team'])
+                    d_o = next(o['price'] for o in market if o['name'] == 'Draw')
+                    a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
+                    
+                    hp, dp, ap, ov, he, de, ae, recs, bias, _ = run_simulation(h_o, d_o, a_o, m['sport_title'])
 
-                market = m['bookmakers'][0]['markets'][0]['outcomes']
-                h_o = next(o['price'] for o in market if o['name'] == m['home_team'])
-                d_o = next(o['price'] for o in market if o['name'] == 'Draw')
-                a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
-                
-                hp, dp, ap, ov, he, de, ae, recs, bias, _ = run_simulation(h_o, d_o, a_o, m['sport_title'])
+                    conn = sqlite3.connect('zeus_data.db')
+                    c = conn.cursor()
+                    m_id = f"{m['id']}_{commence_time.strftime('%Y%m%d')}"
+                    c.execute("INSERT OR IGNORE INTO matches (match_id, league, home, away, prediction, timestamp, start_time) VALUES (?,?,?,?,?,?,?)",
+                              (m_id, m['sport_title'], m['home_team'], m['away_team'], ", ".join(recs), datetime.now().strftime('%Y-%m-%d'), time_str))
+                    conn.commit()
+                    conn.close()
 
-                # 儲存至資料庫 (含開賽時間)
-                conn = sqlite3.connect('zeus_data.db')
-                c = conn.cursor()
-                m_id = f"{m['id']}_{commence_time.strftime('%Y%m%d')}"
-                c.execute("INSERT OR IGNORE INTO matches (match_id, league, home, away, prediction, timestamp, start_time) VALUES (?,?,?,?,?,?,?)",
-                          (m_id, m['sport_title'], m['home_team'], m['away_team'], ", ".join(recs), datetime.now().strftime('%Y-%m-%d'), time_str))
-                conn.commit()
-                conn.close()
-
-                st.markdown(f"""
-                <div class="master-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <span style="color:#8b949e; font-size:0.85rem;">🏆 {m['sport_title']} | {bias['label']}</span>
-                        <span class="time-tag">🕒 開賽：{time_str}</span>
+                    st.markdown(f"""
+                    <div class="master-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="color:#8b949e; font-size:0.85rem;">🏆 {m['sport_title']} | {bias['label']}</span>
+                            <span class="time-tag">🕒 開賽：{time_str}</span>
+                        </div>
+                        <div style="margin: 15px 0;">
+                            <span class="home-tag">主</span> <b>{m['home_team']}</b> VS <b>{m['away_team']}</b> <span class="away-tag">客</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>{' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '觀察中'}</div>
+                            <span class="edge-val">Edge: {max(he, ae, de):+.1%}</span>
+                        </div>
                     </div>
-                    <div style="margin: 15px 0;">
-                        <span class="home-tag">主</span> <b>{m['home_team']}</b> VS <b>{m['away_team']}</b> <span class="away-tag">客</span>
-                    </div>
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>{' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '觀察中'}</div>
-                        <span class="edge-val">Edge: {max(he, ae, de):+.1%}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            except: continue
-
-    with tab2:
-        st.info("十萬次隨機模擬最高機率比分")
-        for m in data[:8]:
-            try:
-                time_str = (datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)).strftime("%H:%M")
-                market = m['bookmakers'][0]['markets'][0]['outcomes']
-                h_o, d_o, a_o = [next(o['price'] for o in market if o['name'] == x) for x in [m['home_team'], 'Draw', m['away_team']]]
-                _, _, _, _, _, _, _, _, _, s_list = run_simulation(h_o, d_o, a_o, m['sport_title'])
-                
-                st.write(f"**[{time_str}] {m['home_team']} vs {m['away_team']}**")
-                cols = st.columns(5)
-                for i, (score, prob) in enumerate(s_list.items()):
-                    cols[i].metric(score, f"{prob:.1%}")
-                st.divider()
-            except: continue
+                    """, unsafe_allow_html=True)
+                except: continue
 
     with tab3:
-        st.subheader("📚 歷史紀錄與精準度回測")
+        st.subheader("📚 歷史紀錄與回測")
         conn = sqlite3.connect('zeus_data.db')
-        df = pd.read_sql_query("SELECT * FROM matches ORDER BY start_time DESC LIMIT 30", conn)
+        # 加入安全排序，若 start_time 為空則排在後面
+        df = pd.read_sql_query("SELECT * FROM matches ORDER BY start_time DESC, timestamp DESC LIMIT 30", conn)
         
         if not df.empty:
             for idx, row in df.iterrows():
-                with st.expander(f"🕒 {row['start_time']} | {row['home']} vs {row['away']}"):
+                with st.expander(f"🕒 {row['start_time'] if row['start_time'] else '舊紀錄'} | {row['home']} vs {row['away']}"):
                     st.write(f"**建議：** {row['prediction']}")
                     score_res = st.text_input("輸入賽果", value=row['result'] if row['result'] else "", key=f"res_{row['match_id']}")
                     if st.button("確認存檔", key=f"btn_{row['match_id']}"):
