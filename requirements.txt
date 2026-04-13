@@ -4,3 +4,4 @@ requests
 pytz
 xlsxwriter
 beautifulsoup4
+lxml
