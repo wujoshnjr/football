@@ -1,164 +1,156 @@
 import streamlit as st
-import numpy as np
-import pandas as pd
-import math
 import requests
+import numpy as np
+import math
 from datetime import datetime
 
 # ==========================================
-# 🎨 1. 全局配置與高對比度樣式
+# 🔑 1. API 密鑰配置 (請填入你手邊有的 Key)
 # ==========================================
-st.set_page_config(page_title="MATCH PREDICT PRO v12.5", layout="wide")
+ODDS_API_KEY = "你的_ODDS_API_KEY"
+SPORTMONKS_API_KEY = "你的_SPORTMONKS_KEY"
 
-# 強制深色模式與自定義字體樣式
+# ==========================================
+# 🎨 2. UI 強度優化 (高清晰度、多賽事卡片)
+# ==========================================
+st.set_page_config(page_title="Match Predict Pro v16.0", layout="wide")
+
 st.markdown("""
 <style>
-    .reportview-container { background: #0d1117; }
-    .main-header { font-size: 2.2rem; font-weight: 900; color: #00ff88; text-align: center; margin-bottom: 20px; }
-    .match-card { 
-        background: #161b22; border: 1px solid #30363d; border-radius: 15px; 
-        padding: 20px; margin-bottom: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    .stApp { background-color: #0d1117; color: #c9d1d9; }
+    .match-container {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     }
-    .ev-badge { background: #f1c40f; color: #000; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 0.8rem; }
-    .score-matrix-item { background: rgba(88, 166, 255, 0.1); border: 1px dashed #58a6ff; padding: 10px; border-radius: 8px; text-align: center; }
-    table { width: 100%; color: white !important; }
-    th { color: #8b949e !important; }
+    .status-bar { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 0.8rem; }
+    .league-tag { color: #58a6ff; font-weight: bold; }
+    .ev-tag { background: #238636; color: #fff; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    .score-item { 
+        background: #0d1117; border: 1px solid #21262d; border-radius: 6px; 
+        padding: 10px; text-align: center; color: #58a6ff; font-family: 'JetBrains Mono', monospace;
+    }
+    h2 { color: #ffffff !important; margin: 5px 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🧠 2. 數據抓取引擎 (對接運彩 / 國際盤 / AiScore)
+# 📡 3. 數據抓取引擎
 # ==========================================
-class DataEngine:
-    """
-    此模組負責自動化抓取邏輯。
-    實務上可串接 The-Odds-API 或 Selenium 抓取台灣運彩官網。
-    """
-    def fetch_all_matches(self):
-        # 這裡模擬從 API 抓取回來的多場賽事數據
-        # 包含：賽事編號、聯賽、隊伍、運彩賠率、國際平均賠率、AiScore 基本面
-        return [
-            {
-                "id": "1397", "league": "西甲", "home": "赫塔菲", "away": "萊萬特",
-                "tsl_odds": {"h": 2.30, "d": 2.55, "a": 2.70},
-                "intl_odds": {"h": 2.15, "d": 2.65, "a": 2.85},
-                "aiscore": {
-                    "rank": "#8 vs #15", "h2h": "1勝 3和 1負",
-                    "formation": "5-4-1 vs 4-2-3-1",
-                    "key_news": "主隊後防核心復出，客隊前鋒拉傷缺陣。"
-                },
-                "h_exp": 1.45, "a_exp": 1.10 # 模型預期進球
-            },
-            {
-                "id": "1402", "league": "義甲", "home": "佛羅倫薩", "away": "拉齊奧",
-                "tsl_odds": {"h": 2.45, "d": 2.80, "a": 2.35},
-                "intl_odds": {"h": 2.30, "d": 2.90, "a": 2.25},
-                "aiscore": {
-                    "rank": "#7 vs #6", "h2h": "2勝 0和 3負",
-                    "formation": "4-3-3 vs 4-3-3",
-                    "key_news": "拉齊奧周中踢完歐冠體力受損，盤口呈現退盤趨勢。"
-                },
-                "h_exp": 1.20, "a_exp": 1.55
-            }
-        ]
+def get_global_matches():
+    """使用 The-Odds-API 抓取全球賽事"""
+    url = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={ODDS_API_KEY}&regions=eu&markets=h2h"
+    try:
+        res = requests.get(url)
+        return res.json() if res.status_code == 200 else []
+    except:
+        return []
 
 # ==========================================
-# ⚖️ 3. 預測核心 (Dixon-Coles & Poisson 整合)
+# 🧠 4. 模型核心 (Dixon-Coles 修正)
 # ==========================================
-class PredictionCore:
-    def poisson(self, l, k): return (np.power(l, k) * np.exp(-l)) / math.factorial(k)
-
-    def analyze(self, match):
-        h_l, a_l = match['h_exp'], match['a_exp']
-        
-        # 生成比分矩陣 (6x6)
-        matrix = np.zeros((6, 6))
-        for i in range(6):
-            for j in range(6):
-                prob = self.poisson(h_l, i) * self.poisson(a_l, j)
-                matrix[i, j] = prob
-        
-        # 0:0 修正 (足球隨機性補償)
-        matrix[0,0] *= 1.35
-        matrix /= np.sum(matrix)
-        
-        # 計算 W/D/L 與 大小球機率
-        h_p, d_p, a_p = np.sum(np.tril(matrix, -1)), np.sum(np.diag(matrix)), np.sum(np.triu(matrix, 1))
-        o25 = 1 - (matrix[0,0]+matrix[0,1]+matrix[0,2]+matrix[1,0]+matrix[1,1]+matrix[2,0])
-        
-        # 計算市場 EV (Market Expected Value)
-        # 以「模型勝率」與「運彩賠率」計算價值
-        ev = (h_p * match['tsl_odds']['h']) - 1
-        
-        # 獲取 Top 5 波膽
-        scores = []
-        for i in range(4):
-            for j in range(4):
-                scores.append({"s": f"{i}:{j}", "p": matrix[i, j]})
-        top_scores = sorted(scores, key=lambda x: x['p'], reverse=True)[:5]
-        
-        return {"p": [h_p, d_p, a_p], "o25": o25, "ev": ev, "top_scores": top_scores}
+def analyze_match(h_o, d_o, a_o):
+    # 基於賠率與統計係數推算 Lambda
+    h_l = (1/h_o) * 2.7
+    a_l = (1/a_o) * 2.7
+    
+    def poisson(l, k): return (np.power(l, k) * np.exp(-l)) / math.factorial(k)
+    
+    matrix = np.zeros((6, 6))
+    for i in range(6):
+        for j in range(6):
+            matrix[i, j] = poisson(h_l, i) * poisson(a_l, j)
+    
+    # Dixon-Coles 0:0 零膨脹修正
+    matrix[0,0] *= 1.35
+    matrix /= np.sum(matrix)
+    
+    hp = np.sum(np.tril(matrix, -1))
+    dp = np.sum(np.diag(matrix))
+    ap = np.sum(np.triu(matrix, 1))
+    
+    # 提取 Top 5 波膽
+    scores = []
+    for i in range(4):
+        for j in range(4):
+            scores.append((f"{i}:{j}", matrix[i, j]))
+    top_scores = sorted(scores, key=lambda x: x[1], reverse=True)[:5]
+    
+    return hp, dp, ap, top_scores
 
 # ==========================================
-# 🖥️ 4. Streamlit UI 渲染
+# 🖥️ 5. 畫面渲染
 # ==========================================
 def main():
-    st.markdown("<div class='main-header'>🛡️ MATCH PREDICT PRO v12.5</div>", unsafe_allow_html=True)
-    
-    # 頂部狀態列
-    c1, c2, c3 = st.columns(3)
-    c1.metric("數據更新", datetime.now().strftime("%H:%M:%S"), "API Sync")
-    c2.metric("抓取狀態", "Active", "運彩/AiScore", delta_color="normal")
-    c3.metric("模型信心", "High", "DC-Model", delta_color="inverse")
+    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ MATCH PREDICT PRO v16.0</h1>", unsafe_allow_html=True)
+    st.write(f"🔄 **本地端運行模式** | 同步時間: {datetime.now().strftime('%H:%M:%S')}")
 
-    engine = DataEngine()
-    predictor = PredictionCore()
-    matches = engine.fetch_all_matches()
+    matches = get_global_matches()
+    
+    if not matches:
+        st.error("❌ 無法抓取數據，請確認 API Key。")
+        return
+
+    st.success(f"✅ 已抓取當前全球賽事: {len(matches)} 場")
 
     for m in matches:
-        res = predictor.analyze(m)
-        
-        with st.container():
-            st.markdown(f"""
-            <div class="match-card">
-                <div style="display:flex; justify-content:space-between;">
-                    <span style="color:#58a6ff; font-weight:bold;">[{m['id']}] {m['league']}</span>
-                    <span class="ev-badge">市場 EV: {res['ev']:.2%}</span>
-                </div>
-                <h2 style="margin:10px 0; color:white;">{m['home']} VS {m['away']}</h2>
-            """, unsafe_allow_html=True)
+        try:
+            # 解析賠率
+            bookie = m['bookmakers'][0]['markets'][0]['outcomes']
+            h_o = next(x['price'] for x in bookie if x['name'] == m['home_team'])
+            d_o = next(x['price'] for x in bookie if x['name'] == 'Draw')
+            a_o = next(x['price'] for x in bookie if x['name'] == m['away_team'])
+            
+            hp, dp, ap, scores = analyze_match(h_o, d_o, a_o)
+            ev = (hp * h_o) - 1
 
-            # 1. AiScore 深度戰報
+            # 渲染卡片
             st.markdown(f"""
-            <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:8px; font-size:0.9rem; margin-bottom:15px;">
-                <b>🧠 AiScore 深度戰報：</b><br>
-                📊 排名：{m['aiscore']['rank']} | 對戰：{m['aiscore']['h2h']} | 陣型：{m['aiscore']['formation']}<br>
-                📰 關鍵：{m['aiscore']['key_news']}
+            <div class="match-container">
+                <div class="status-bar">
+                    <span class="league-tag">{m['sport_title']}</span>
+                    <span class="ev-tag">EV: {ev:+.2%}</span>
+                </div>
+                <h2>{m['home_team']} VS {m['away_team']}</h2>
             </div>
             """, unsafe_allow_html=True)
 
-            # 2. 賠率對比表格 (高對比 Markdown)
-            st.markdown(f"""
-            | 數據來源 | 主勝 (1) | 和局 (X) | 客勝 (2) | 大 2.5 |
-            | :--- | :---: | :---: | :---: | :---: |
-            | **台灣運彩** | `{m['tsl_odds']['h']}` | `{m['tsl_odds']['d']}` | `{m['tsl_odds']['a']}` | -- |
-            | **國際均盤** | `{m['intl_odds']['h']}` | `{m['intl_odds']['d']}` | `{m['intl_odds']['a']}` | -- |
-            | **模型機率** | <b style="color:#00ff88;">{res['p'][0]:.1%}</b> | {res['p'][1]:.1%} | <b style="color:#ff4b4b;">{res['p'][2]:.1%}</b> | {res['o25']:.1%} |
-            """, unsafe_allow_html=True)
-
-            # 3. 正確比數矩陣 (波膽)
-            st.write("🎯 **正確比數預測 (波膽 Top 5)**")
-            sc_cols = st.columns(5)
-            for i, score in enumerate(res['top_scores']):
-                sc_cols[i].markdown(f"""
-                <div class="score-matrix-item">
-                    <span style="font-size:0.7rem; color:#8b949e;">{score['s']}</span><br>
-                    <b style="color:#58a6ff;">{score['p']:.1%}</b>
-                </div>
-                """, unsafe_allow_html=True)
+            # 使用 Tabs 區分內容，解決版面雜亂
+            t1, t2, t3 = st.tabs(["📊 賠率機率分析", "🎯 正確比數 (波膽)", "📋 深度統計"])
             
-            st.markdown("</div>", unsafe_allow_html=True)
+            with t1:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("模型勝率", f"{hp:.1%}")
+                c2.metric("和局機率", f"{dp:.1%}")
+                c3.metric("市場賠率", f"{h_o:.2f}")
+                c4.metric("價值評估", "✅ 高" if ev > 0.05 else "⚠️ 中")
+            
+            with t2:
+                st.write("📈 **可能性最高的五個比分：**")
+                sc_cols = st.columns(5)
+                for idx, (s, p) in enumerate(scores):
+                    sc_cols[idx].markdown(f"""
+                    <div class="score-item">
+                        <span style="font-size:0.75rem; color:#8b949e;">{s}</span><br>
+                        <b>{p:.1%}</b>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with t3:
+                st.write("⚙️ **多源 API 串接狀態**")
+                st.json({
+                    "Odds_Source": "The Odds API",
+                    "Stats_Source": "Sportmonks (Pending)",
+                    "Match_ID": m['id']
+                })
+            
             st.markdown("<br>", unsafe_allow_html=True)
+
+        except:
+            continue
 
 if __name__ == "__main__":
     main()
