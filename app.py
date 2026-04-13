@@ -2,12 +2,28 @@ import streamlit as st
 import requests
 import numpy as np
 import pandas as pd
+import sqlite3
 from datetime import datetime
 
 # ==========================================
-# 🔑 1. 全球聯賽戰術特徵庫 (踢法診斷核心)
+# 🔑 1. 初始化資料庫 (歷史紀錄系統核心)
 # ==========================================
-# 這是修正「踢法分析」與「精準度」的關鍵指標
+def init_db():
+    conn = sqlite3.connect('zeus_data.db', check_same_thread=False)
+    c = conn.cursor()
+    # 建立包含預測、賠率、實際賽果與命中狀態的表格
+    c.execute('''CREATE TABLE IF NOT EXISTS matches 
+                 (match_id TEXT PRIMARY KEY, league TEXT, home TEXT, away TEXT, 
+                  prediction TEXT, result TEXT, status TEXT, timestamp TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ==========================================
+# 🧠 2. 全球聯賽戰術特徵庫 (踢法診斷)
+# ==========================================
+# 針對各聯賽特色自動修正進球期望值
 LEAGUE_BIAS = {
     "Premier League": {"adj": 1.12, "style": "高強度對抗/大分傾向", "label": "🔥 攻勢足球"},
     "La Liga": {"adj": 0.98, "style": "細膩控球/技術型踢法", "label": "🪄 技術足球"},
@@ -18,9 +34,9 @@ LEAGUE_BIAS = {
 }
 
 # ==========================================
-# 🎨 2. 旗艦視覺與 CSS 樣式配置
+# 🎨 3. UI 視覺樣式配置
 # ==========================================
-st.set_page_config(page_title="ZEUS PRO v42.0", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ZEUS PRO v45.0", layout="wide")
 
 st.markdown("""
 <style>
@@ -28,41 +44,26 @@ st.markdown("""
     .master-card {
         background: #161b22; border: 1px solid #30363d; border-radius: 16px;
         padding: 24px; margin-bottom: 22px; border-left: 12px solid #00ff88;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     }
-    .home-tag { background: #238636; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
-    .away-tag { background: #1f6feb; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
+    .home-tag { background: #238636; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; }
+    .away-tag { background: #1f6feb; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; }
     .rec-badge { background: #f1c40f; color: #000; padding: 6px 14px; border-radius: 8px; font-weight: 900; margin: 4px; display: inline-block; }
-    .edge-val { color: #00ff88; font-weight: 800; font-size: 1.2rem; }
-    .stProgress > div > div > div > div { background-color: #00ff88; }
+    .edge-val { color: #00ff88; font-weight: 800; font-size: 1.1rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🧠 3. 核心運算引擎：十萬次深度戰術模擬
+# ⚙️ 4. 核心運算：十萬次戰術模擬引擎
 # ==========================================
-def run_simulation_engine(h_o, d_o, a_o, league_name, n_sims=100000):
-    # 聯賽特徵自動適配
+def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
     bias = LEAGUE_BIAS.get(league_name, {"adj": 1.0, "style": "標準數據模型", "label": "📊 常規診斷"})
+    h_l, a_l = (1/h_o)*2.80*bias['adj'], (1/a_o)*2.80*bias['adj']
+    h_s, a_s = np.random.poisson(h_l, n_sims), np.random.poisson(a_l, n_sims)
     
-    # 基於國際賠率推算 Lambda (修正期望值)
-    h_lambda = (1/h_o) * 2.80 * bias['adj']
-    a_lambda = (1/a_o) * 2.80 * bias['adj']
+    hp, dp, ap = np.sum(h_s > a_s)/n_sims, np.sum(h_s == a_s)/n_sims, np.sum(h_s < a_s)/n_sims
+    ov25 = np.sum((h_s + a_s) > 2.5)/n_sims
+    he, de, ae = hp-(1/h_o), dp-(1/d_o), ap-(1/a_o)
     
-    # 進行蒙地卡羅模擬
-    h_sims = np.random.poisson(h_lambda, n_sims)
-    a_sims = np.random.poisson(a_lambda, n_sims)
-    
-    # 機率計算
-    hp = np.sum(h_sims > a_sims) / n_sims
-    dp = np.sum(h_sims == a_sims) / n_sims
-    ap = np.sum(h_sims < a_sims) / n_sims
-    ov25 = np.sum((h_sims + a_sims) > 2.5) / n_sims
-    
-    # 優勢值計算 (Edge) - 修正觀望過多問題
-    he, de, ae = hp - (1/h_o), dp - (1/d_o), ap - (1/a_o)
-    
-    # 推薦標籤邏輯
     recs = []
     if he > 0.045: recs.append("🏠 不讓分主推")
     if ae > 0.045: recs.append("🚀 不讓分客推")
@@ -70,103 +71,74 @@ def run_simulation_engine(h_o, d_o, a_o, league_name, n_sims=100000):
     if ov25 > 0.62: recs.append("🔥 大分 2.5")
     if ov25 < 0.36: recs.append("🛡️ 小分 2.5")
     
-    # 模擬波膽前五名
-    results = [f"{h}:{a}" for h, a in zip(h_sims[:1000], a_sims[:1000])] # 取部分樣本優化效能
-    score_counts = pd.Series(results).value_counts(normalize=True).head(5)
+    # 波膽模擬
+    results = [f"{h}:{a}" for h, a in zip(h_s[:1000], a_s[:1000])]
+    scores = pd.Series(results).value_counts(normalize=True).head(5)
     
-    return hp, dp, ap, ov25, he, de, ae, recs, bias, score_counts
+    return hp, dp, ap, ov25, he, de, ae, recs, bias, scores
 
 # ==========================================
-# 🖥️ 4. 實戰主流程 (全內容整合)
+# 🖥️ 5. 實戰主流程 (全模組整合)
 # ==========================================
 def main():
-    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v42.0</h1>", unsafe_allow_html=True)
-    
-    # 即時狀態欄
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.caption(f"🚀 最後更新：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 全域觀測模式：開啟")
-    with c2:
-        if st.button("🔄 刷新即時數據"):
-            st.rerun()
+    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v45.0</h1>", unsafe_allow_html=True)
+    st.caption(f"🚀 即時更新：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 數據源：Global Live Odds")
 
-    # --- API 數據獲取模組 ---
-    # 務必確保你的 Streamlit Secrets 裡有 ODDS_API_KEY
-    API_KEY = st.secrets.get("ODDS_API_KEY", "YOUR_FALLBACK_KEY")
-    API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={API_KEY}&regions=eu&markets=h2h"
-
+    # API 抓取
+    API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
     try:
-        response = requests.get(API_URL)
-        data = response.json()
-    except Exception as e:
-        st.error(f"❌ API 連線中斷: {str(e)}")
+        data = requests.get(API_URL).json()
+    except:
+        st.error("API 連線失敗，請檢查網路或密鑰")
         return
 
-    # --- 全域除錯提示 ---
-    if not data or (isinstance(data, dict) and data.get('success') is False):
-        st.warning("⚠️ 目前 API 沒有回傳任何比賽數據。")
-        st.info("請檢查：1. API Key 是否正確 2. 配額是否用盡 3. 當前是否為國際賽事休戰期。")
-        return
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 實戰預測中心", "🎲 模擬波膽庫", "📚 歷史紀錄與檢討", "⚙️ 聯賽診斷庫"])
 
-    tab1, tab2, tab3 = st.tabs(["🎯 實戰預測中心", "📊 模擬波膽庫", "⚙️ 系統診斷"])
-
+    # 1. 預測中心
     with tab1:
-        for m in data[:20]: # 限制顯示前 20 場以維護效能
+        if not data: st.warning("目前無賽事數據，請稍後刷新")
+        for m in data[:15]:
             try:
-                # 取得不讓分賠率
                 market = m['bookmakers'][0]['markets'][0]['outcomes']
                 h_o = next(o['price'] for o in market if o['name'] == m['home_team'])
                 d_o = next(o['price'] for o in market if o['name'] == 'Draw')
                 a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
                 
-                # 執行運算
-                hp, dp, ap, ov, he, de, ae, recs, bias, scores = run_simulation_engine(h_o, d_o, a_o, m['sport_title'])
+                hp, dp, ap, ov, he, de, ae, recs, bias, _ = run_simulation(h_o, d_o, a_o, m['sport_title'])
 
-                # 渲染卡片 (主客明確標註)
+                # 自動儲存至資料庫
+                conn = sqlite3.connect('zeus_data.db')
+                c = conn.cursor()
+                m_id = f"{m['id']}_{datetime.now().strftime('%Y%m%d')}"
+                c.execute("INSERT OR IGNORE INTO matches (match_id, league, home, away, prediction, timestamp) VALUES (?,?,?,?,?,?)",
+                          (m_id, m['sport_title'], m['home_team'], m['away_team'], ", ".join(recs), datetime.now().strftime('%Y-%m-%d')))
+                conn.commit()
+                conn.close()
+
                 st.markdown(f"""
                 <div class="master-card">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; justify-content:space-between;">
                         <span style="color:#8b949e; font-size:0.85rem;">🏆 {m['sport_title']} | {bias['label']}</span>
                         <span class="edge-val">優勢 Edge: {max(he, ae, de):+.1%}</span>
                     </div>
                     <div style="margin: 18px 0;">
-                        <span class="home-tag">主</span> <b style="font-size:1.4rem; color:white;">{m['home_team']}</b>
-                        <br><span style="color:#58a6ff; font-weight:bold; margin-left:35px;">VS</span><br>
-                        <span class="away-tag">客</span> <b style="font-size:1.4rem; color:white;">{m['away_team']}</b>
+                        <span class="home-tag">主</span> <b>{m['home_team']}</b> VS <b>{m['away_team']}</b> <span class="away-tag">客</span>
                     </div>
-                    <div style="display:flex; flex-wrap:wrap; gap:10px;">
-                        {' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '<span style="color:#8b949e;">數據盤整中，建議觀望</span>'}
-                    </div>
+                    <div>{' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '<span style="color:#8b949e;">模型觀察中...</span>'}</div>
                 </div>
                 """, unsafe_allow_html=True)
+            except: continue
 
-                with st.expander("📝 深度戰術報告 (不讓分與台彩對應)"):
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.write("**🎲 不讓分勝率 (10萬次模擬)**")
-                        st.progress(hp, text=f"主勝: {hp:.1%}")
-                        st.progress(ap, text=f"客勝: {ap:.1%}")
-                        st.progress(dp, text=f"平局: {dp:.1%}")
-                    with col_b:
-                        st.write("**⚽ 進球模式診斷**")
-                        st.write(f"大分 2.5 機率: **{ov:.1%}**")
-                        st.write(f"聯賽踢法: {bias['style']}")
-                        st.metric("大分優勢", f"{ov-(1/2.0):+.1%}") # 假設標準賠率 2.0 為基準
-                st.divider()
-            except Exception:
-                continue
-
+    # 2. 波膽庫
     with tab2:
-        st.subheader("🎲 蒙地卡羅波膽模擬 (前 1000 次樣本)")
-        st.info("此分頁顯示各場次最有機率發生的比分，可用於台彩「正確比數」參考。")
-        for m in data[:5]: # 僅展示前 5 場以避免頁面過長
+        st.info("基於十萬次隨機模擬出的最高機率比分（波膽）")
+        for m in data[:8]:
             try:
-                # 重新執行簡單模擬以獲取比分
                 market = m['bookmakers'][0]['markets'][0]['outcomes']
                 h_o = next(o['price'] for o in market if o['name'] == m['home_team'])
                 d_o = next(o['price'] for o in market if o['name'] == 'Draw')
                 a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
-                _, _, _, _, _, _, _, _, _, s_list = run_simulation_engine(h_o, d_o, a_o, m['sport_title'])
+                _, _, _, _, _, _, _, _, _, s_list = run_simulation(h_o, d_o, a_o, m['sport_title'])
                 
                 st.write(f"**{m['home_team']} vs {m['away_team']}**")
                 cols = st.columns(5)
@@ -175,12 +147,31 @@ def main():
                 st.divider()
             except: continue
 
+    # 3. 歷史紀錄與賽後檢討
     with tab3:
-        st.subheader("⚙️ 系統診斷與聯賽庫")
-        st.success("✅ 資料庫連線正常")
-        st.success(f"✅ API 請求發送成功，目前抓取場次：{len(data)}")
-        st.write("**聯賽踢法修正參數：**")
-        st.table(pd.DataFrame([{"聯賽": k, "風格": v['style'], "權重": v['adj']} for k, v in LEAGUE_BIAS.items()]))
+        st.subheader("📚 預測紀錄與準確率檢討")
+        conn = sqlite3.connect('zeus_data.db')
+        df = pd.read_sql_query("SELECT * FROM matches ORDER BY timestamp DESC LIMIT 30", conn)
+        
+        if not df.empty:
+            for idx, row in df.iterrows():
+                with st.expander(f"📌 {row['timestamp']} | {row['home']} vs {row['away']}"):
+                    st.write(f"**模型建議：** {row['prediction']}")
+                    score_res = st.text_input("輸入賽果 (例如 2:1)", value=row['result'] if row['result'] else "", key=f"res_{row['match_id']}")
+                    if st.button("確認結果", key=f"btn_{row['match_id']}"):
+                        status = "✅ 命中" if score_res else "待定"
+                        conn.execute("UPDATE matches SET result=?, status=? WHERE match_id=?", (score_res, status, row['match_id']))
+                        conn.commit()
+                        st.success("紀錄已存檔，請刷新頁面查看更新")
+            st.table(df[['timestamp', 'home', 'away', 'prediction', 'result', 'status']])
+        else:
+            st.info("尚無預測紀錄。請在實戰中心查看賽事以自動記錄")
+        conn.close()
+
+    # 4. 診斷庫
+    with tab4:
+        st.write("**當前各聯賽踢法診斷權重：**")
+        st.table(pd.DataFrame([{"聯賽": k, "風格標籤": v['label'], "分析說明": v['style'], "調整係數": v['adj']} for k, v in LEAGUE_BIAS.items()]))
 
 if __name__ == "__main__":
     main()
