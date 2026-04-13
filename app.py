@@ -6,94 +6,143 @@ import io
 from datetime import datetime, timedelta
 from football.engine import FootballTradingEngine
 
-st.set_page_config(page_title="Hedge Fund V5 - Live Data", layout="wide")
+# 1. 基本頁面設定
+st.set_page_config(page_title="Football Trading System v5 (Live)", layout="wide")
+
+# 初始化引擎與台北時區
 engine = FootballTradingEngine()
 tz = pytz.timezone("Asia/Taipei")
 
-# --- API 抓取函式庫 ---
-def fetch_real_fixtures():
-    """從 Sportmonks 獲取真實賽程"""
-    api_token = st.secrets["SPORTMONKS_API_KEY"]
-    # 抓取未來 24 小時內的賽程 (範例 URL，需依版本調整)
-    url = f"https://api.sportmonks.com/v3/football/fixtures?api_token={api_token}&include=participants;league"
-    response = requests.get(url).json()
-    return response.get('data', [])
-
-def fetch_live_odds():
-    """從 The Odds API 獲取即時賠率"""
-    api_key = st.secrets["ODDS_API_KEY"]
-    url = f"https://api.the-odds-api.com/v4/sports/soccer_uefa_champs_league/odds/?apiKey={api_key}&regions=eu"
-    response = requests.get(url).json()
-    return {f"{m['home_team']} vs {m['away_team']}": m['bookmakers'][0]['markets'][0]['outcomes'] for m in response if 'bookmakers' in m}
-
-def fetch_football_news(query):
-    """從 News API 獲取相關新聞"""
-    api_key = st.secrets["NEWS_API_KEY"]
-    url = f"https://newsapi.org/v2/everything?q={query}&language=en&pageSize=3&apiKey={api_key}"
-    response = requests.get(url).json()
-    return response.get('articles', [])
-
-# --- 全自動流水線 ---
-@st.cache_data(ttl=1800) # 每 30 分鐘更新一次真實數據
-def run_live_pipeline():
-    fixtures = fetch_real_fixtures()
-    odds_data = fetch_live_odds()
-    
-    final_results = []
-    for f in fixtures[:10]: # 處理前 10 場
-        home = f['participants'][0]['name']
-        away = f['participants'][1]['name']
-        
-        # 執行引擎預測
-        res = engine.predict(home, away)
-        
-        # 處理時間
-        res['kickoff_tpe'] = datetime.strptime(f['starting_at'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=pytz.utc).astimezone(tz)
-        
-        # 匹配賠率數據
-        match_key = f"{home} vs {away}"
-        res['market_odds'] = odds_data.get(match_key, "N/A")
-        
-        # 抓取新聞 (選取主隊新聞作為參考)
-        res['news'] = fetch_football_news(home)
-        
-        final_results.append(res)
-    return final_results
-
-# 執行自動化抓取
-with st.spinner("正在串接 API 數據..."):
-    live_data = run_live_pipeline()
-
-# --- UI 顯示 (對沖基金風格) ---
 st.title("⚽ Football Trading System v5 (Live Data)")
 
-for res in live_data:
-    with st.container():
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            st.subheader(f"🏟️ {res['home_team']} vs {res['away_team']}")
-            st.caption(f"📅 台北時間: {res['kickoff_tpe'].strftime('%m-%d %H:%M')}")
+# =========================================
+# 🚀 數據整合核心 (API 驅動)
+# =========================================
+@st.cache_data(ttl=1800) # 每30分鐘自動更新，保證數據真實性
+def run_live_pipeline():
+    # --- A. 從 Sportmonks 獲取真實賽程 ---
+    sm_key = st.secrets["SPORTMONKS_API_KEY"]
+    # 獲取今日賽程
+    sm_url = f"https://api.sportmonks.com/v3/football/fixtures?api_token={sm_key}&include=participants;league"
+    
+    try:
+        sm_res = requests.get(sm_url).json()
+        raw_fixtures = sm_res.get('data', [])
+    except Exception as e:
+        st.error(f"Sportmonks 連線失敗: {e}")
+        raw_fixtures = []
+
+    # --- B. 從 The Odds API 獲取真實賠率 ---
+    odds_key = st.secrets["ODDS_API_KEY"]
+    # 以英超為例 (soccer_epl)，你可以根據需要修改聯賽代碼
+    odds_url = f"https://api.the-odds-api.com/v4/sports/soccer_epl/odds/?apiKey={odds_key}&regions=eu"
+    
+    try:
+        odds_res = requests.get(odds_url).json()
+        # 建立快速比對字典 {(主隊, 客隊): 賠率數據}
+        odds_lookup = { (m['home_team'], m['away_team']): m for m in odds_res }
+    except:
+        odds_lookup = {}
+
+    # --- C. 整合與預測 ---
+    final_data = []
+    
+    for f in raw_fixtures:
+        # 提取真實隊名與時間
+        try:
+            home = f['participants'][0]['name']
+            away = f['participants'][1]['name']
+            start_time_str = f['starting_at'] # YYYY-MM-DD HH:MM:SS
             
-            # 顯示新聞
-            with st.expander("📰 相關新聞分析"):
-                for art in res['news']:
-                    st.write(f"- [{art['title']}]({art['url']})")
+            # 呼叫模型運算
+            res = engine.predict(home, away)
+            
+            # 時間轉換 (UTC -> TPE)
+            utc_dt = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M:%S')
+            res['kickoff_tpe'] = utc_dt.replace(tzinfo=pytz.utc).astimezone(tz)
+            
+            # 匹配賠率
+            res['market_odds'] = odds_lookup.get((home, away), None)
+            
+            # 抓取新聞 (News API)
+            news_key = st.secrets["NEWS_API_KEY"]
+            news_url = f"https://newsapi.org/v2/everything?q={home}&apiKey={news_key}&pageSize=1"
+            res['news'] = requests.get(news_url).json().get('articles', [])
 
-        with col2:
-            st.write("**Model Prediction**")
-            st.metric("Home Win", f"{res['home_prob']:.1%}")
-            st.metric("Away Win", f"{res['away_prob']:.1%}")
+            final_data.append(res)
+        except (KeyError, IndexError):
+            continue
+            
+    return final_data
 
-        with col3:
-            st.write("**Market Odds (Live)**")
-            if res['market_odds'] != "N/A":
-                for outcome in res['market_odds']:
-                    st.write(f"{outcome['name']}: {outcome['price']}")
-            else:
-                st.write("暫無賠率數據")
+# 啟動自動化流水線
+with st.spinner("正在同步全球即時賽事數據..."):
+    live_matches = run_live_pipeline()
 
-        st.divider()
+# =========================================
+# 📊 側邊欄控制與動態 Excel 輸出
+# =========================================
+st.sidebar.header("📊 系統控制台")
+st.sidebar.write(f"最後更新: {datetime.now(tz).strftime('%H:%M:%S')}")
 
-# --- Excel 導出邏輯 ---
-# (與之前版本相同，處理時區後下載)
+if live_matches:
+    # 處理 Excel 匯出 (移除時區以避免 ValueError)
+    df_excel = pd.DataFrame(live_matches).copy()
+    if 'kickoff_tpe' in df_excel.columns:
+        df_excel['kickoff_tpe'] = df_excel['kickoff_tpe'].dt.strftime('%Y-%m-%d %H:%M')
+    if 'top_scores' in df_excel.columns:
+        df_excel['top_scores'] = df_excel['top_scores'].apply(lambda x: " | ".join([str(i[0]) for i in x]))
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_excel.to_excel(writer, index=False, sheet_name='Live_Predictions')
+    
+    st.sidebar.download_button(
+        label="📥 下載今日真實預測報表",
+        data=output.getvalue(),
+        file_name=f"Real_Time_Report_{datetime.now(tz).strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.ms-excel"
+    )
+
+# 歷史持久化顯示
+if st.sidebar.checkbox("查看數據庫持久化紀錄"):
+    st.dataframe(engine.get_all_history())
+
+# =========================================
+# 🏟️ 主介面顯示 (真實比賽)
+# =========================================
+if not live_matches:
+    st.warning("目前時段暫無真實比賽數據，請確認 API Key 或聯賽設定。")
+else:
+    for res in live_matches:
+        with st.container():
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                st.markdown(f"### 🏟️ {res['home_team']} vs {res['away_team']}")
+                st.caption(f"📅 開賽時間 (台北): {res['kickoff_tpe'].strftime('%m-%d %H:%M')}")
+                
+                # 顯示新聞
+                if res['news']:
+                    with st.expander("📰 相關新聞摘要"):
+                        st.write(f"**{res['news'][0]['title']}**")
+                        st.write(f"[閱讀全文]({res['news'][0]['url']})")
+
+            with col2:
+                st.write("**模型預測機率**")
+                st.metric("Home Win", f"{res['home_prob']:.1%}")
+                st.metric("Away Win", f"{res['away_prob']:.1%}")
+                st.metric("Draw", f"{res['draw_prob']:.1%}")
+
+            with col3:
+                st.write("**市場即時賠率**")
+                if res['market_odds']:
+                    for outcome in res['market_odds']['bookmakers'][0]['markets'][0]['outcomes']:
+                        st.write(f"{outcome['name']}: `{outcome['price']}`")
+                else:
+                    st.info("尚未開盤")
+
+            # 顯示預測比分
+            scores_str = " | ".join([str(s[0]) for s in res['top_scores']])
+            st.write(f"🎯 **精確比分預測:** {scores_str}")
+            st.divider()
