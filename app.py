@@ -6,25 +6,20 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🔑 1. 初始化與相容性修復 (修正 DatabaseError)
+# 🔑 1. 初始化與相容性修復
 # ==========================================
 def init_db():
     conn = sqlite3.connect('zeus_data.db', check_same_thread=False)
     c = conn.cursor()
-    # 建立基礎表格
     c.execute('''CREATE TABLE IF NOT EXISTS matches 
                  (match_id TEXT PRIMARY KEY, league TEXT, home TEXT, away TEXT, 
                   prediction TEXT, result TEXT, status TEXT, 
                   timestamp TEXT, start_time TEXT)''')
-    
-    # 【關鍵修復】：檢查是否存在 start_time 欄位，若無則新增 (針對舊資料庫遷移)
     try:
         c.execute("SELECT start_time FROM matches LIMIT 1")
     except sqlite3.OperationalError:
-        st.info("🔄 偵測到舊版資料庫，正在升級結構...")
         c.execute("ALTER TABLE matches ADD COLUMN start_time TEXT")
         conn.commit()
-        
     conn.close()
 
 init_db()
@@ -33,18 +28,18 @@ init_db()
 # 🧠 2. 全球聯賽戰術特徵庫
 # ==========================================
 LEAGUE_BIAS = {
-    "Premier League": {"adj": 1.12, "style": "高強度對抗/大分傾向", "label": "🔥 攻勢足球"},
+    "Premier League": {"adj": 1.15, "style": "高強度對抗/大分傾向", "label": "🔥 攻勢足球"},
     "La Liga": {"adj": 0.98, "style": "細膩控球/技術型踢法", "label": "🪄 技術足球"},
-    "Serie A": {"adj": 0.92, "style": "傳統鏈式防守/小分傾向", "label": "🛡️ 戰術防守"},
-    "Bundesliga": {"adj": 1.28, "style": "高位壓迫/極大分傾向", "label": "🏹 激情全攻"},
-    "Premier League - Russia": {"adj": 0.82, "style": "硬朗防守/低進球模式", "label": "❄️ 鐵血防守"},
-    "Ligue 1": {"adj": 1.05, "style": "體能化對抗/中性進球", "label": "🏃 強力對抗"}
+    "Serie A": {"adj": 0.95, "style": "傳統鏈式防守/小分傾向", "label": "🛡️ 戰術防守"},
+    "Bundesliga": {"adj": 1.25, "style": "高位壓迫/極大分傾向", "label": "🏹 激情全攻"},
+    "Premier League - Russia": {"adj": 0.88, "style": "硬朗防守/低進球模式", "label": "❄️ 鐵血防守"},
+    "Ligue 1": {"adj": 1.02, "style": "體能化對抗/中性進球", "label": "🏃 強力對抗"}
 }
 
 # ==========================================
 # 🎨 3. UI 視覺樣式配置
 # ==========================================
-st.set_page_config(page_title="ZEUS PRO v46.1", layout="wide")
+st.set_page_config(page_title="ZEUS PRO v47.0", layout="wide")
 
 st.markdown("""
 <style>
@@ -54,34 +49,53 @@ st.markdown("""
         padding: 24px; margin-bottom: 22px; border-left: 12px solid #00ff88;
     }
     .time-tag { color: #8b949e; font-size: 0.85rem; font-weight: bold; }
-    .home-tag { background: #238636; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; }
-    .away-tag { background: #1f6feb; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; }
+    .home-tag { background: #238636; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
+    .away-tag { background: #1f6feb; color: white; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
     .rec-badge { background: #f1c40f; color: #000; padding: 6px 14px; border-radius: 8px; font-weight: 900; margin: 4px; display: inline-block; }
     .edge-val { color: #00ff88; font-weight: 800; font-size: 1.1rem; }
+    .score-badge { background: #1f2937; color: #e5e7eb; padding: 4px 8px; border-radius: 6px; font-size: 0.85rem; margin-right: 6px; border: 1px solid #4b5563;}
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ⚙️ 4. 核心運算引擎
+# ⚙️ 4. 核心運算引擎 (🚀 v47.0 演算法大修)
 # ==========================================
 def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
     bias = LEAGUE_BIAS.get(league_name, {"adj": 1.0, "style": "標準數據模型", "label": "📊 常規診斷"})
-    h_l, a_l = (1/h_o)*2.80*bias['adj'], (1/a_o)*2.80*bias['adj']
-    h_s, a_s = np.random.poisson(h_l, n_sims), np.random.poisson(a_l, n_sims)
+    
+    # 1. 修正賠率還原真實機率 (去除莊家水錢)
+    margin = (1/h_o) + (1/d_o) + (1/a_o)
+    ph = (1/h_o) / margin
+    pa = (1/a_o) / margin
+    
+    # 2. 解放進球火力：將基準進球數拉高到平均 2.85 球
+    base_goals = 2.85 * bias['adj']
+    
+    # 3. 按實力分攤進球，並給予微幅主場加成 (1.05)
+    h_l = base_goals * (ph / (ph + pa)) * 1.05
+    a_l = base_goals * (pa / (ph + pa)) * 0.95
+    
+    # 泊松分佈模擬
+    h_s = np.random.poisson(h_l, n_sims)
+    a_s = np.random.poisson(a_l, n_sims)
     
     hp, dp, ap = np.sum(h_s > a_s)/n_sims, np.sum(h_s == a_s)/n_sims, np.sum(h_s < a_s)/n_sims
     ov25 = np.sum((h_s + a_s) > 2.5)/n_sims
     he, de, ae = hp-(1/h_o), dp-(1/d_o), ap-(1/a_o)
     
     recs = []
-    if he > 0.045: recs.append("🏠 不讓分主推")
-    if ae > 0.045: recs.append("🚀 不讓分客推")
-    if de > 0.05: recs.append("💎 和局博弈")
-    if ov25 > 0.62: recs.append("🔥 大分 2.5")
-    if ov25 < 0.36: recs.append("🛡️ 小分 2.5")
+    # 放寬 Edge 門檻至 2.5%，讓模型不再整天「觀察中」
+    if he > 0.025: recs.append("🏠 主勝推")
+    if ae > 0.025: recs.append("🚀 客勝推")
+    if de > 0.035: recs.append("💎 和局博弈")
     
-    results = [f"{h}:{a}" for h, a in zip(h_s[:1000], a_s[:1000])]
-    scores = pd.Series(results).value_counts(normalize=True).head(5)
+    # 修正大小分判定邏輯
+    if ov25 > 0.55: recs.append("🔥 大分 2.5")
+    elif ov25 < 0.44: recs.append("🛡️ 小分 2.5")
+    
+    # 提取最高機率的前三名波膽
+    results = [f"{h}:{a}" for h, a in zip(h_s[:2000], a_s[:2000])] # 取樣數放大求穩
+    scores = pd.Series(results).value_counts(normalize=True).head(3)
     
     return hp, dp, ap, ov25, he, de, ae, recs, bias, scores
 
@@ -89,7 +103,7 @@ def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
 # 🖥️ 5. 實戰主流程
 # ==========================================
 def main():
-    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v46.1</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v47.0</h1>", unsafe_allow_html=True)
     
     try:
         API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
@@ -98,7 +112,7 @@ def main():
         st.error(f"❌ API 獲取失敗: {e}")
         return
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🎯 實戰預測中心", "🎲 模擬波膽庫", "📚 歷史紀錄與檢討", "⚙️ 聯賽診斷庫"])
+    tab1, tab2, tab3 = st.tabs(["🎯 實戰預測中心", "📚 歷史紀錄與回測", "⚙️ 聯賽診斷庫"])
 
     with tab1:
         if not data or not isinstance(data, list):
@@ -113,7 +127,7 @@ def main():
                     d_o = next(o['price'] for o in market if o['name'] == 'Draw')
                     a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
                     
-                    hp, dp, ap, ov, he, de, ae, recs, bias, _ = run_simulation(h_o, d_o, a_o, m['sport_title'])
+                    hp, dp, ap, ov, he, de, ae, recs, bias, scores = run_simulation(h_o, d_o, a_o, m['sport_title'])
 
                     conn = sqlite3.connect('zeus_data.db')
                     c = conn.cursor()
@@ -123,28 +137,37 @@ def main():
                     conn.commit()
                     conn.close()
 
+                    # 組合波膽標籤
+                    score_html = "".join([f"<span class='score-badge'>{s} ({p:.1%})</span>" for s, p in scores.items()])
+
                     st.markdown(f"""
                     <div class="master-card">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <span style="color:#8b949e; font-size:0.85rem;">🏆 {m['sport_title']} | {bias['label']}</span>
                             <span class="time-tag">🕒 開賽：{time_str}</span>
                         </div>
-                        <div style="margin: 15px 0;">
-                            <span class="home-tag">主</span> <b>{m['home_team']}</b> VS <b>{m['away_team']}</b> <span class="away-tag">客</span>
+                        <div style="margin: 18px 0 10px 0;">
+                            <span class="home-tag">主</span> <b style="font-size:1.1rem;">{m['home_team']}</b> <span style="color:#8b949e; margin:0 8px;">vs</span> 
+                            <b style="font-size:1.1rem;">{m['away_team']}</b> <span class="away-tag">客</span>
                         </div>
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div>{' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '觀察中'}</div>
-                            <span class="edge-val">Edge: {max(he, ae, de):+.1%}</span>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <span style="color:#a3a8b0; font-size:0.85rem; margin-right:5px;">🎲 十萬次模擬波膽：</span> 
+                            {score_html}
+                        </div>
+
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-top: 1px solid #30363d; padding-top: 12px;">
+                            <div>{' '.join([f'<span class="rec-badge">{r}</span>' for r in recs]) if recs else '<span style="color:#6e7681; font-size:0.9rem;">模型觀察中... (無明顯盤口漏洞)</span>'}</div>
+                            <span class="edge-val">優勢 Edge: {max(he, ae, de):+.1%}</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
                 except: continue
 
-    with tab3:
+    with tab2:
         st.subheader("📚 歷史紀錄與回測")
         conn = sqlite3.connect('zeus_data.db')
-        # 加入安全排序，若 start_time 為空則排在後面
-        df = pd.read_sql_query("SELECT * FROM matches ORDER BY start_time DESC, timestamp DESC LIMIT 30", conn)
+        df = pd.read_sql_query("SELECT * FROM matches ORDER BY start_time DESC, timestamp DESC LIMIT 40", conn)
         
         if not df.empty:
             for idx, row in df.iterrows():
@@ -158,7 +181,7 @@ def main():
             st.table(df[['start_time', 'home', 'away', 'prediction', 'result', 'status']])
         conn.close()
 
-    with tab4:
+    with tab3:
         st.table(pd.DataFrame([{"聯賽": k, "風格": v['style'], "權重": v['adj']} for k, v in LEAGUE_BIAS.items()]))
 
 if __name__ == "__main__":
