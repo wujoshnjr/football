@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # ==========================================
-# 🔑 1. 初始化資料庫 (確保結構完整)
+# 🔑 1. 初始化資料庫
 # ==========================================
 def init_db():
     conn = sqlite3.connect('zeus_data.db', check_same_thread=False)
@@ -21,7 +21,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 🧠 2. 聯賽大數據特性加權
+# 🧠 2. 聯賽加權設定
 # ==========================================
 LEAGUE_BIAS = {
     "Premier League": {"adj": 1.05, "label": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 英超"},
@@ -29,13 +29,13 @@ LEAGUE_BIAS = {
     "Serie A": {"adj": 0.92, "label": "🇮🇹 意甲"},
     "Bundesliga": {"adj": 1.15, "label": "🇩🇪 德甲"},
     "Ligue 1": {"adj": 0.98, "label": "🇫🇷 法甲"},
-    "Premier League - Russia": {"adj": 0.82, "label": "❄️ 俄超 (鐵血防守)"}
+    "Premier League - Russia": {"adj": 0.82, "label": "❄️ 俄超"}
 }
 
 # ==========================================
-# 🎨 3. CSS 視覺美化 (手機適配)
+# 🎨 3. UI 視覺 (修正渲染邏輯)
 # ==========================================
-st.set_page_config(page_title="ZEUS PRO v60.0", layout="wide")
+st.set_page_config(page_title="ZEUS PRO v61.0", layout="wide")
 
 st.markdown("""
 <style>
@@ -46,21 +46,20 @@ st.markdown("""
     }
     .status-bar { font-size: 0.85rem; color: #8b949e; margin-bottom: 15px; }
     .team-line { font-size: 1.3rem; font-weight: 800; margin: 12px 0; color: #ffffff; }
-    .score-badge { background: #21262d; color: #58a6ff; padding: 4px 10px; border-radius: 5px; font-size: 0.9rem; border: 1px solid #30363d; margin-right: 8px; font-family: monospace; display: inline-block; }
+    .score-badge { background: #21262d; color: #58a6ff; padding: 4px 10px; border-radius: 5px; font-size: 0.85rem; border: 1px solid #30363d; margin-right: 8px; display: inline-block; font-family: monospace; }
     .rec-badge { background: #f1c40f; color: #000; padding: 6px 14px; border-radius: 8px; font-weight: 900; margin-right: 10px; display: inline-block; }
     .edge-val { color: #00ff88; font-weight: 700; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# ⚙️ 4. 核心模擬引擎 (數據平衡校準)
+# ⚙️ 4. 演算引擎
 # ==========================================
 def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
     bias = LEAGUE_BIAS.get(league_name, {"adj": 1.0, "label": "⚽ 常規"})
     margin = (1/h_o) + (1/d_o) + (1/a_o)
     ph, pd, pa = (1/h_o)/margin, (1/d_o)/margin, (1/a_o)/margin
     
-    # 基準進球率 2.65 (防止每場都大分)
     total_goals = 2.65 * bias['adj']
     h_l = total_goals * (ph / (ph + pa)) * 1.05
     a_l = total_goals * (pa / (ph + pa)) * 0.95
@@ -76,64 +75,79 @@ def run_simulation(h_o, d_o, a_o, league_name, n_sims=100000):
     recs = []
     if he > 0.035: recs.append("🏠 主勝")
     if ae > 0.035: recs.append("🚀 客勝")
-    if de > 0.035: recs.append("🤝 和局博弈")
+    if de > 0.035: recs.append("🤝 和局")
     if sim_ov25 > 0.60: recs.append("🔥 大 2.5")
     elif sim_ov25 < 0.40: recs.append("🛡️ 小 2.5")
     
-    # 波膽機率統計
     results = [f"{h}:{a}" for h, a in zip(h_s[:5000], a_s[:5000])]
     scores = pd.Series(results).value_counts(normalize=True).head(3)
     
-    return he, de, ae, recs, bias, scores, (sim_h, sim_d, sim_a, sim_ov25)
+    return he, de, ae, recs, bias, scores
 
 # ==========================================
-# 🖥️ 5. 實戰主流程
+# 🖥️ 5. 主程式
 # ==========================================
 def main():
-    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v60.0</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center; color:#00ff88;'>🛡️ ZEUS PREDICT PRO v61.0</h1>", unsafe_allow_html=True)
     
-    try:
-        API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
-        data = requests.get(API_URL).json()
-    except:
-        st.error("API 連接失敗")
-        return
-
+    # 建立頁籤
     tab1, tab2, tab3 = st.tabs(["🎯 實戰預測中心", "📚 歷史數據覆盤", "⚙️ 系統診斷"])
 
     with tab1:
-        st.markdown(f"<div class='status-bar'>🚀 即時更新：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 數據頻率：60s</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='status-bar'>🚀 最後檢查：{datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
         
-        if not data or not isinstance(data, list):
-            st.warning("⚠️ 暫無即時比賽數據")
+        # 1. API 抓取與除錯
+        try:
+            API_URL = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={st.secrets['ODDS_API_KEY']}&regions=eu&markets=h2h"
+            resp = requests.get(API_URL)
+            data = resp.json()
+            
+            if resp.status_code != 200:
+                st.error(f"❌ API 報錯：{data.get('message', '未知錯誤')}")
+                return
+        except Exception as e:
+            st.error(f"❌ 無法連接 API：{str(e)}")
+            return
+
+        if not data:
+            st.warning("⚠️ 目前 API 沒有回傳任何賽事，請確認 API Key 餘額或稍後再試。")
         else:
+            match_count = 0
             for m in data[:20]:
                 try:
-                    start_time = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)
-                    time_str = start_time.strftime("%m/%d %H:%M")
+                    # 賠率擷取測試
+                    bookmaker = m.get('bookmakers')
+                    if not bookmaker: continue
                     
-                    market = m['bookmakers'][0]['markets'][0]['outcomes']
+                    market = bookmaker[0]['markets'][0]['outcomes']
                     h_o = next(o['price'] for o in market if o['name'] == m['home_team'])
                     d_o = next(o['price'] for o in market if o['name'] == 'Draw')
                     a_o = next(o['price'] for o in market if o['name'] == m['away_team'])
                     
-                    he, de, ae, recs, bias, scores, probs = run_simulation(h_o, d_o, a_o, m['sport_title'])
+                    # 計算
+                    he, de, ae, recs, bias, scores = run_simulation(h_o, d_o, a_o, m['sport_title'])
 
-                    # 自動儲存到資料庫
-                    conn = sqlite3.connect('zeus_data.db')
-                    c = conn.cursor()
-                    m_id = f"{m['id']}_{start_time.strftime('%m%d')}"
-                    pred_str = " ".join(recs) if recs else "模型觀察中"
-                    c.execute("INSERT OR IGNORE INTO matches (match_id, league, home, away, prediction, status, timestamp, start_time) VALUES (?,?,?,?,?,?,?,?)",
-                              (m_id, m['sport_title'], m['home_team'], m['away_team'], pred_str, "待定", datetime.now().strftime('%Y-%m-%d %H:%M'), time_str))
-                    conn.commit()
-                    conn.close()
+                    # 時間處理
+                    start_time = datetime.strptime(m['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)
+                    time_str = start_time.strftime("%m/%d %H:%M")
 
-                    # 渲染卡片
+                    # 資料庫寫入 (不影響 UI)
+                    try:
+                        conn = sqlite3.connect('zeus_data.db')
+                        c = conn.cursor()
+                        m_id = f"{m['id']}_{start_time.strftime('%m%d')}"
+                        pred_str = " ".join(recs) if recs else "模型觀察中"
+                        c.execute("INSERT OR IGNORE INTO matches (match_id, league, home, away, prediction, status, timestamp, start_time) VALUES (?,?,?,?,?,?,?,?)",
+                                  (m_id, m['sport_title'], m['home_team'], m['away_team'], pred_str, "待定", datetime.now().strftime('%Y-%m-%d %H:%M'), time_str))
+                        conn.commit()
+                        conn.close()
+                    except: pass
+
+                    # 卡片渲染
                     score_tags = "".join([f"<div class='score-badge'>{s} ({p:.1%})</div>" for s, p in scores.items()])
                     rec_tags = "".join([f"<div class='rec-badge'>{r}</div>" for r in recs]) if recs else "<span style='color:#666;'>數據觀望中</span>"
 
-                    card_html = f"""<div class="master-card">
+                    st.markdown(f"""<div class="master-card">
 <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#8b949e;">
 <span>🏆 {m['sport_title']} | {bias['label']}</span>
 <span>🕒 {time_str}</span>
@@ -142,35 +156,35 @@ def main():
 <div style="margin: 10px 0;">{score_tags}</div>
 <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #30363d; padding-top:12px;">
 <div>{rec_tags}</div>
-<div class="edge-val">優勢 Edge: {max(he, de, ae):+.1%}</div>
+<div class="edge-val">Edge: {max(he, de, ae):+.1%}</div>
 </div>
-</div>"""
-                    st.markdown(card_html, unsafe_allow_html=True)
-                except: continue
+</div>""", unsafe_allow_html=True)
+                    match_count += 1
+                except Exception as e:
+                    # 這裡如果出錯會顯示在頁面上幫助我們抓 Bug
+                    st.write(f"⚠️ 賽事解析錯誤 ({m.get('home_team', '未知')}): {str(e)}")
+                    continue
+            
+            if match_count == 0:
+                st.info("💡 API 有回傳數據，但暫無符合條件的比賽（可能賠率格式不符）。")
 
     with tab2:
+        # 歷史覆盤保留
         st.markdown("### 📝 賽果覆盤編輯器")
-        st.write("直接在表格修改真實賽果，並點擊下方按鈕儲存。")
         conn = sqlite3.connect('zeus_data.db')
         df = pd.read_sql_query("SELECT match_id, start_time, league, home, away, prediction, result, status FROM matches ORDER BY timestamp DESC LIMIT 50", conn)
         if not df.empty:
-            edited_df = st.data_editor(df, column_config={
-                "match_id": None, "start_time": "開賽", "league": "聯賽", "home": "主隊", "away": "客隊", "prediction": "推薦",
-                "result": st.column_config.TextColumn("真實賽果"),
-                "status": st.column_config.SelectboxColumn("狀態", options=["待定", "✅ 命中", "❌ 未中", "➖ 走水"])
-            }, use_container_width=True, hide_index=True)
-            if st.button("💾 儲存更改", use_container_width=True):
+            edited_df = st.data_editor(df, use_container_width=True, hide_index=True)
+            if st.button("💾 儲存更改"):
                 c = conn.cursor()
-                for _, row in edited_df.iterrows():
-                    c.execute("UPDATE matches SET result=?, status=? WHERE match_id=?", (row['result'], row['status'], row['match_id']))
-                conn.commit()
-                st.success("✅ 數據已更新！")
-        else: st.info("目前尚無歷史數據紀錄。")
+                for _, r in edited_df.iterrows():
+                    c.execute("UPDATE matches SET result=?, status=? WHERE match_id=?", (r['result'], r['status'], r['match_id']))
+                conn.commit(); st.success("更新成功")
         conn.close()
 
     with tab3:
-        st.markdown("### ⚙️ 系統與資料庫診斷")
-        if st.button("🗑️ 危險動作：清空所有數據紀錄"):
+        st.markdown("### ⚙️ 系統診斷")
+        if st.button("🗑️ 清空資料庫"):
             conn = sqlite3.connect('zeus_data.db'); c = conn.cursor()
             c.execute("DELETE FROM matches"); conn.commit(); conn.close()
             st.rerun()
