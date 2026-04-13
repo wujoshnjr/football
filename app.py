@@ -1,220 +1,244 @@
 # ============================================
-# INSTITUTIONAL FOOTBALL TRADING SYSTEM v5.1 FIXED
-# Hedge Fund Grade Betting Engine (FULL FIX)
+# FOOTBALL TRADING SYSTEM V5 (FIXED + UPGRADED)
+# Hedge Fund Prediction Engine
 # ============================================
 
 import os
+import asyncio
 import numpy as np
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from enum import Enum
 import pytz
-from dataclasses import dataclass
-from typing import List, Tuple
-from scipy.stats import poisson
+from scipy import stats
+
+# ============================================
+# CONFIG
+# ============================================
+
+TZ = pytz.timezone("Asia/Taipei")
+
+st.set_page_config(
+    page_title="V5 Football Hedge Fund",
+    layout="wide"
+)
+
+# ============================================
+# ENUMS
+# ============================================
+
+class TrapSignal(Enum):
+    OK = "OK"
+    WARNING = "WARNING"
+    TRAP_HOME = "TRAP_HOME"
+    TRAP_AWAY = "TRAP_AWAY"
+    TRAP_DRAW = "TRAP_DRAW"
 
 # ============================================
 # DATA STRUCTURES
 # ============================================
 
 @dataclass
-class Team:
+class TeamStats:
     name: str
-    atk: float
-    dfd: float
+    attack: float
+    defense: float
+    form: float
+    home_adv: float = 1.15
 
 @dataclass
 class Match:
-    home: Team
-    away: Team
+    home: TeamStats
+    away: TeamStats
     league: str
     kickoff: datetime
-    odds: Tuple[float, float, float]
+    odds_home: float
+    odds_draw: float
+    odds_away: float
 
 # ============================================
-# TIME SYSTEM (FIXED - TAIPEI)
+# MODEL ENGINE (FIXED)
 # ============================================
 
-def to_taipei_time(dt):
-    tz = pytz.timezone("Asia/Taipei")
-    return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+class PoissonEngine:
+    def lambda_goals(self, atk, dfn, home_adv=1.0):
+        return max(0.2, min(4.5, atk * (1/dfn) * 2.5 * home_adv))
 
-# ============================================
-# POISSON MODEL (FIXED BIAS)
-# ============================================
-
-class PoissonModel:
-
-    def predict(self, match):
-
-        home_strength = match.home.atk * match.away.dfd
-        away_strength = match.away.atk * match.home.dfd
-
-        # ✅ FIXED HOME ADVANTAGE (之前錯誤核心)
-        home_lambda = (home_strength * 1.25) / 1.15
-        away_lambda = (away_strength * 1.05) / 1.15
-
-        home_goals = poisson.pmf(range(6), home_lambda)
-        away_goals = poisson.pmf(range(6), away_lambda)
-
-        # Monte Carlo approximation probabilities
-        home_prob = min(max(home_lambda / (home_lambda + away_lambda), 0.05), 0.85)
-        away_prob = min(max(away_lambda / (home_lambda + away_lambda), 0.05), 0.85)
-        draw_prob = max(0.10, 1 - home_prob - away_prob)
-
-        return {
-            "home": home_prob,
-            "draw": draw_prob,
-            "away": away_prob,
-            "xg_home": home_lambda,
-            "xg_away": away_lambda
-        }
-
-# ============================================
-# MONTE CARLO (100K SIMULATION FIXED)
-# ============================================
+    def simulate_score(self, lh, la):
+        max_g = 6
+        matrix = {}
+        for h in range(max_g):
+            for a in range(max_g):
+                p = stats.poisson.pmf(h, lh) * stats.poisson.pmf(a, la)
+                matrix[f"{h}-{a}"] = p
+        return matrix
 
 class MonteCarlo:
-
-    def simulate(self, home_xg, away_xg, n=100000):
-
-        home = np.random.poisson(home_xg, n)
-        away = np.random.poisson(away_xg, n)
-
-        home_win = np.mean(home > away)
-        draw = np.mean(home == away)
-        away_win = np.mean(home < away)
+    def run(self, lh, la, n=100000):
+        hg = np.random.poisson(lh, n)
+        ag = np.random.poisson(la, n)
 
         return {
-            "home": home_win,
-            "draw": draw,
-            "away": away_win,
-            "avg_home_goals": np.mean(home),
-            "avg_away_goals": np.mean(away),
+            "home": np.mean(hg > ag),
+            "draw": np.mean(hg == ag),
+            "away": np.mean(hg < ag),
+            "hg_mean": np.mean(hg),
+            "ag_mean": np.mean(ag),
+            "over25": np.mean(hg + ag > 2.5)
         }
 
-# ============================================
-# KELLY + EV (SAFE)
-# ============================================
-
-def ev(prob, odds):
-    return (prob * odds) - 1
-
-def kelly(prob, odds):
-    b = odds - 1
-    if b <= 0:
-        return 0
-    k = ((b * prob) - (1 - prob)) / b
-    return max(0, min(k, 0.05))  # cap 5%
+class Kelly:
+    def stake(self, prob, odds):
+        if odds <= 1:
+            return 0
+        b = odds - 1
+        q = 1 - prob
+        k = (b * prob - q) / b
+        return max(0, min(k, 0.05))
 
 # ============================================
-# MATCH GENERATOR (40+ MATCHES FIXED)
+# TRAP DETECTOR
 # ============================================
 
-def generate_matches():
+def detect_trap(model, odds):
+    diff = abs(model["home"] - (1/odds.odds_home))
+    if diff > 0.15:
+        return TrapSignal.WARNING, diff
+    return TrapSignal.OK, diff
 
+# ============================================
+# DEMO MATCHES (FIXED + MORE)
+# ============================================
+
+def load_matches():
     teams = [
-        ("Arsenal", 1.35, 0.95),
-        ("Chelsea", 1.25, 1.05),
-        ("Liverpool", 1.50, 0.90),
-        ("Man City", 1.65, 0.85),
-        ("Real Madrid", 1.60, 0.88),
-        ("Barcelona", 1.45, 0.95),
-        ("Bayern", 1.70, 0.80),
-        ("PSG", 1.40, 1.00),
-        ("Inter", 1.30, 1.05),
-        ("Juventus", 1.20, 1.10),
+        ("Man City", "Arsenal"),
+        ("Real Madrid", "Barcelona"),
+        ("Bayern", "Dortmund"),
+        ("Inter", "AC Milan"),
+        ("PSG", "Marseille"),
+        ("Chelsea", "Liverpool"),
+        ("Atletico", "Sevilla"),
+        ("Juventus", "Napoli"),
+        ("Ajax", "PSV"),
+        ("Benfica", "Porto"),
+        ("Dortmund", "Leipzig"),
+        ("Tottenham", "Newcastle"),
     ]
 
     matches = []
-    base = datetime(2026, 1, 1, 18, 0)
+    base = datetime.now(TZ)
 
-    # ✅ FIX: 40+ matches
-    for i in range(40):
-
-        home = teams[np.random.randint(len(teams))]
-        away = teams[np.random.randint(len(teams))]
-
-        while away[0] == home[0]:
-            away = teams[np.random.randint(len(teams))]
-
-        kickoff = base + timedelta(hours=i * 3)
-
-        matches.append(
-            Match(
-                home=Team(*home),
-                away=Team(*away),
-                league="EURO LEAGUE",
-                kickoff=kickoff,
-                odds=(
-                    round(np.random.uniform(1.5, 2.5), 2),
-                    round(np.random.uniform(3.0, 4.2), 2),
-                    round(np.random.uniform(3.2, 5.5), 2),
-                )
-            )
+    for i, (h, a) in enumerate(teams * 2):  # 🔥 increase matches
+        match = Match(
+            home=TeamStats(h, np.random.uniform(1.0,1.3), np.random.uniform(0.8,1.2), np.random.uniform(0.8,1.3)),
+            away=TeamStats(a, np.random.uniform(1.0,1.3), np.random.uniform(0.8,1.2), np.random.uniform(0.8,1.3)),
+            league="EURO",
+            kickoff=base + timedelta(hours=i*3),
+            odds_home=np.random.uniform(1.6,2.4),
+            odds_draw=np.random.uniform(3.0,3.8),
+            odds_away=np.random.uniform(2.8,4.5)
         )
+        matches.append(match)
 
     return matches
 
 # ============================================
-# STREAMLIT UI (FIXED DISPLAY)
+# ENGINE RUN
+# ============================================
+
+poisson = PoissonEngine()
+mc = MonteCarlo()
+kelly = Kelly()
+
+def analyze(match):
+    lh = poisson.lambda_goals(match.home.attack, match.away.defense, match.home.home_adv)
+    la = poisson.lambda_goals(match.away.attack, match.home.defense, 1.0)
+
+    sim = mc.run(lh, la)
+
+    trap, score = detect_trap(sim, match)
+
+    ev_home = sim["home"] * match.odds_home - 1
+    ev_draw = sim["draw"] * match.odds_draw - 1
+    ev_away = sim["away"] * match.odds_away - 1
+
+    return {
+        "sim": sim,
+        "trap": trap,
+        "score": score,
+        "ev": {"H": ev_home, "D": ev_draw, "A": ev_away},
+        "kelly": {
+            "H": kelly.stake(sim["home"], match.odds_home),
+            "D": kelly.stake(sim["draw"], match.odds_draw),
+            "A": kelly.stake(sim["away"], match.odds_away),
+        },
+        "lambda": (lh, la)
+    }
+
+# ============================================
+# UI (IMPROVED)
 # ============================================
 
 def main():
 
-    st.set_page_config(page_title="Football Hedge Fund v5.1", layout="wide")
+    st.title("🏦 V5 Football Hedge Fund Trading System")
 
-    st.title("🏦 Football Trading System v5.1 FIXED")
-    st.markdown("### Hedge Fund Simulation Engine (Corrected)")
+    matches = load_matches()
 
-    model = PoissonModel()
-    mc = MonteCarlo()
-
-    matches = generate_matches()
-
-    st.success(f"Loaded {len(matches)} matches")
+    st.sidebar.header("Controls")
+    only_value = st.sidebar.checkbox("Only Value Bets", True)
 
     for m in matches:
 
-        pred = model.predict(m)
-        sim = mc.simulate(pred["xg_home"], pred["xg_away"])
+        r = analyze(m)
+
+        if only_value and max(r["ev"].values()) < 0:
+            continue
+
+        kickoff_str = m.kickoff.strftime("%Y-%m-%d %H:%M (TPE)")
 
         st.markdown("---")
 
-        # ================= FIXED MATCH UI =================
-        col1, col2, col3 = st.columns([3, 1, 1])
+        # HEADER
+        col1, col2, col3 = st.columns([3,1,1])
 
         with col1:
             st.subheader(f"{m.home.name} vs {m.away.name}")
-            st.write(f"🏆 {m.league}")
-            st.write(f"🕒 Kickoff: {to_taipei_time(m.kickoff)}")
+            st.caption(f"{m.league} | Kickoff: {kickoff_str}")
 
         with col2:
-            st.metric("Home Prob", f"{sim['home']:.2%}")
-            st.metric("Draw Prob", f"{sim['draw']:.2%}")
-            st.metric("Away Prob", f"{sim['away']:.2%}")
+            st.metric("Trap", r["trap"].value, f"{r['score']:.2f}")
 
         with col3:
-            ev_home = ev(sim["home"], m.odds[0])
-            ev_draw = ev(sim["draw"], m.odds[1])
-            ev_away = ev(sim["away"], m.odds[2])
+            st.metric("Over25", f"{r['sim']['over25']:.1%}")
 
-            st.write("📊 EV:")
-            st.write(f"H: {ev_home:.2f}")
-            st.write(f"D: {ev_draw:.2f}")
-            st.write(f"A: {ev_away:.2f}")
+        # PROBABILITIES
+        c1,c2,c3 = st.columns(3)
 
-            st.write("💰 Kelly:")
-            st.write(f"H: {kelly(sim['home'], m.odds[0]):.2%}")
-            st.write(f"D: {kelly(sim['draw'], m.odds[1]):.2%}")
-            st.write(f"A: {kelly(sim['away'], m.odds[2]):.2%}")
+        c1.metric("Home Win", f"{r['sim']['home']:.1%}")
+        c2.metric("Draw", f"{r['sim']['draw']:.1%}")
+        c3.metric("Away Win", f"{r['sim']['away']:.1%}")
 
-        st.write(f"⚽ xG: {pred['xg_home']:.2f} - {pred['xg_away']:.2f}")
-        st.write(f"📈 Avg Goals: {sim['avg_home_goals']:.2f} - {sim['avg_away_goals']:.2f}")
+        # EXPECTED GOALS
+        st.write(f"⚽ xG Home: {r['lambda'][0]:.2f} | Away: {r['lambda'][1]:.2f}")
 
-# ============================================
-# RUN
-# ============================================
+        # EV
+        st.write("📊 EV:")
+        st.write(r["ev"])
+
+        # KELLY
+        st.write("💰 Kelly:")
+        st.write(r["kelly"])
+
+        # SCORELINES
+        scores = poisson.simulate_score(r["lambda"][0], r["lambda"][1])
+        top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        st.write("🎯 Top Scorelines:")
+        st.write(top)
 
 if __name__ == "__main__":
     main()
