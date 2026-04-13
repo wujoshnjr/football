@@ -1,8 +1,4 @@
 streamlit
-numpy
 pandas
-aiohttp
-scipy
-plotly
 pytz
-python-dotenv
+xlsxwriter
