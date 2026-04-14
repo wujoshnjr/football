@@ -1,7 +1,6 @@
 streamlit
-pandas
 requests
 numpy
+pandas
 scipy
 pytz
-xlsxwriter
