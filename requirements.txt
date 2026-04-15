@@ -1,7 +1,6 @@
 streamlit
 pandas
+numpy
+scipy
 requests
-pytz
-xlsxwriter
-beautifulsoup4
-lxml
+textblob
