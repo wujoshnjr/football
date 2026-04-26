@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime
 
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import plotly.express as px
@@ -20,8 +20,8 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.DARKLY, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True
 )
-app.title = "ZEUS QUANT · 專業足球分析"
-server = app.server  # gunicorn 用
+app.title = "ZEUS QUANT · 專業足球分析平台"
+server = app.server
 
 # ---------- 資料庫 ----------
 def init_db():
@@ -89,7 +89,8 @@ def get_demo_matches():
 
 # ---------- API 整合區 ----------
 def fetch_live_data():
-    # 1. Odds API（即時賠率）
+    """多源融合：ODDS → Sportmonks → Demo"""
+    # 1. Odds API
     odds_key = os.environ.get("ODDS_API_KEY")
     if odds_key:
         try:
@@ -115,7 +116,7 @@ def fetch_live_data():
                 if matches: return matches
         except Exception: pass
 
-    # 2. Sportmonks（賽程備援）
+    # 2. Sportmonks（備援）
     sportmonks_key = os.environ.get("SPORTMONKS_API_KEY")
     if sportmonks_key:
         try:
@@ -143,8 +144,8 @@ def fetch_live_data():
     return get_demo_matches()
 
 def fetch_team_stats(team_name):
-    """多層降級獲取球隊數據：Sports API → APIFootball → RapidAPI (API-Football) → 模擬"""
-    # 第一優先：Sports API
+    """多層降級：Sports API → APIFootball → RapidAPI → 模擬"""
+    # 1. Sports API
     sports_key = os.environ.get("SPORTS_API_KEY")
     if sports_key:
         try:
@@ -162,7 +163,7 @@ def fetch_team_stats(team_name):
                         }
         except Exception: pass
 
-    # 第二優先：APIFootball
+    # 2. APIFootball
     apifoot_key = os.environ.get("APIFOOTBALL_API_KEY")
     if apifoot_key:
         try:
@@ -184,7 +185,7 @@ def fetch_team_stats(team_name):
                     }
         except Exception: pass
 
-    # 第三優先：RapidAPI (API-Football v3)
+    # 3. RapidAPI (API-Football v3)
     rapid_key = os.environ.get("RAPIDAPI_KEY")
     if rapid_key:
         try:
@@ -206,19 +207,17 @@ def fetch_team_stats(team_name):
                         "possession": random.randint(45, 65)
                     }
         except Exception: pass
-
     return None
 
 def fetch_standings(league_name):
-    """從 Football-Data.org 獲取聯賽積分榜"""
+    """Football-Data.org 積分榜"""
     fd_key = os.environ.get("FOOTBALL_DATA_API_KEY")
     if not fd_key:
         return None
     try:
         league_codes = {"英超": "PL", "西甲": "PD", "德甲": "BL1", "意甲": "SA", "法甲": "FL1"}
         code = league_codes.get(league_name)
-        if not code:
-            return None
+        if not code: return None
         url = f"https://api.football-data.org/v4/competitions/{code}/standings"
         headers = {"X-Auth-Token": fd_key}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -229,19 +228,19 @@ def fetch_standings(league_name):
                 if table["type"] == "TOTAL":
                     for row in table["table"]:
                         standings.append({
-                            "position": row["position"],
-                            "team": row["team"]["name"],
-                            "played": row["playedGames"],
-                            "points": row["points"],
-                            "goal_diff": row["goalDifference"]
+                            "排名": row["position"],
+                            "隊伍": row["team"]["name"],
+                            "已賽": row["playedGames"],
+                            "積分": row["points"],
+                            "得失差": row["goalDifference"]
                         })
             return standings[:10]
     except Exception: pass
     return None
 
 def fetch_news():
-    """新聞獲取：NEWS_API → SERPAPI → RAPIDAPI (News API)"""
-    # 第一優先：NewsAPI.org
+    """新聞：NEWS API → SerpApi → RapidAPI News"""
+    # 1. NewsAPI
     news_key = os.environ.get("NEWS_API_KEY")
     if news_key:
         try:
@@ -255,47 +254,39 @@ def fetch_news():
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 200:
                 articles = resp.json().get("articles", [])
-                return [{"title": a["title"], "source": a["source"]["name"], "url": a["url"]}
-                        for a in articles]
+                return [{"title": a["title"], "source": a["source"]["name"], "url": a["url"],
+                         "publishedAt": a["publishedAt"][:10]} for a in articles]
         except Exception: pass
 
-    # 第二優先：SerpApi (Google News)
+    # 2. SerpApi
     serp_key = os.environ.get("SERPAPI_KEY")
     if serp_key:
         try:
             url = "https://serpapi.com/search"
-            params = {
-                "q": "football latest",
-                "api_key": serp_key,
-                "engine": "google_news"
-            }
+            params = {"q": "football latest", "api_key": serp_key, "engine": "google_news"}
             resp = requests.get(url, params=params, timeout=10)
             if resp.status_code == 200:
                 news = resp.json().get("news_results", [])
-                return [{"title": n["title"], "source": n["source"], "url": n["link"]}
-                        for n in news[:5]]
+                return [{"title": n["title"], "source": n["source"], "url": n["link"],
+                         "publishedAt": n.get("date", "")[:10]} for n in news[:5]]
         except Exception: pass
 
-    # 第三優先：RapidAPI News (以 google-news 為例，若您未訂閱則可能失敗)
+    # 3. RapidAPI News
     rapid_key = os.environ.get("RAPIDAPI_KEY")
     if rapid_key:
         try:
             url = "https://google-news13.p.rapidapi.com/world"
-            headers = {
-                "x-rapidapi-key": rapid_key,
-                "x-rapidapi-host": "google-news13.p.rapidapi.com"
-            }
+            headers = {"x-rapidapi-key": rapid_key, "x-rapidapi-host": "google-news13.p.rapidapi.com"}
             params = {"lr": "en-US"}
             resp = requests.get(url, headers=headers, params=params, timeout=10)
             if resp.status_code == 200:
                 items = resp.json().get("items", [])
-                return [{"title": item["title"], "source": item["source"]["name"], "url": item["url"]}
-                        for item in items[:5]]
+                return [{"title": i["title"], "source": i["source"]["name"], "url": i["url"],
+                         "publishedAt": i.get("publishedAt", "")[:10]} for i in items[:5]]
         except Exception: pass
-
     return []
 
-# ---------- 卡片 UI ----------
+# ---------- 卡片 UI (專業強化) ----------
 def create_match_card(match):
     lambda_h = 1.65 * team_strength(match['home'])
     lambda_a = 1.20 * team_strength(match['away'])
@@ -310,43 +301,47 @@ def create_match_card(match):
     top_score = scorelines(lambda_h, lambda_a)
     best = max(k_h, k_d, k_a)
     if best < 0.01:
-        advice = "觀望"
+        advice = "⚖️ 觀望"
+        advice_color = "secondary"
     else:
         if best == k_h:
-            advice = f"凱利推薦: 主勝 ({best * 100:.1f}%)"
+            advice = f"📈 凱利推薦: 主勝 ({best * 100:.1f}%)"
+            advice_color = "success"
         elif best == k_d:
-            advice = f"凱利推薦: 和局 ({best * 100:.1f}%)"
+            advice = f"📈 凱利推薦: 和局 ({best * 100:.1f}%)"
+            advice_color = "warning"
         else:
-            advice = f"凱利推薦: 客勝 ({best * 100:.1f}%)"
+            advice = f"📈 凱利推薦: 客勝 ({best * 100:.1f}%)"
+            advice_color = "danger"
 
     return dbc.Card(
         dbc.CardBody([
             html.Div([
                 html.Span(f"🏆 {match['league']}", className="badge bg-info me-2"),
-                html.Small(f"λ主 {lambda_h:.2f} / λ客 {lambda_a:.2f}", className="text-muted")
+                html.Small(f"λ主 {lambda_h:.2f} / λ客 {lambda_a:.2f} · 信心 {min(p_h,p_d,p_a)*100:.0f}%", className="text-muted")
             ], className="mb-2"),
             html.H4(f"{match['home']}  vs  {match['away']}", className="text-light"),
             dbc.Row([
                 dbc.Col(html.Div([
                     html.Div("主勝", className="text-uppercase text-muted small"),
                     html.H5(f"{p_h:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[0]} | 值 {val_h:+.2f}")
+                    html.Small(f"賠 {odds[0]} · 值 {val_h:+.2f}")
                 ]), width=4),
                 dbc.Col(html.Div([
                     html.Div("和局", className="text-uppercase text-muted small"),
                     html.H5(f"{p_d:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[1]} | 值 {val_d:+.2f}")
+                    html.Small(f"賠 {odds[1]} · 值 {val_d:+.2f}")
                 ]), width=4),
                 dbc.Col(html.Div([
                     html.Div("客勝", className="text-uppercase text-muted small"),
                     html.H5(f"{p_a:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[2]} | 值 {val_a:+.2f}")
+                    html.Small(f"賠 {odds[2]} · 值 {val_a:+.2f}")
                 ]), width=4),
             ], className="my-2"),
-            dbc.Progress(value=k_h * 100, label=f"凱利主 {k_h:.1%}", color="success", className="mt-1"),
-            dbc.Progress(value=k_d * 100, label=f"凱利和 {k_d:.1%}", color="warning"),
+            dbc.Progress(value=k_h * 100, label=f"凱利主 {k_h:.1%}", color="success", className="mb-1"),
+            dbc.Progress(value=k_d * 100, label=f"凱利和 {k_d:.1%}", color="warning", className="mb-1"),
             dbc.Progress(value=k_a * 100, label=f"凱利客 {k_a:.1%}", color="danger"),
-            html.P(advice, className="mt-2 text-warning fw-bold"),
+            html.P(advice, className=f"mt-2 fw-bold text-{advice_color}"),
             html.Div("🎯 波膽: " + " · ".join([f"{s[0]} ({s[1] * 100:.1f}%)" for s in top_score[:4]]),
                      className="small text-muted"),
         ]),
@@ -356,6 +351,13 @@ def create_match_card(match):
 # ---------- 佈局 ----------
 app.layout = dbc.Container([
     html.H1("ZEUS QUANT", className="text-info fw-bold my-3"),
+    # 頂部統計列
+    dbc.Row([
+        dbc.Col(dbc.Card([html.H5("賽事數", className="text-info"), html.H3(id="stat-matches")], body=True, color="dark"), width=3),
+        dbc.Col(dbc.Card([html.H5("即時聯賽", className="text-info"), html.H3(id="stat-leagues")], body=True, color="dark"), width=3),
+        dbc.Col(dbc.Card([html.H5("最新凱利推薦", className="text-info"), html.H3(id="stat-advice")], body=True, color="dark"), width=3),
+        dbc.Col(dbc.Card([html.H5("新聞頭條", className="text-info"), html.H3(id="stat-news")], body=True, color="dark"), width=3),
+    ], className="mb-3"),
     dbc.Tabs([
         dbc.Tab(label="⚡ 即時分析", tab_id="tab-live"),
         dbc.Tab(label="📈 深度圖表", tab_id="tab-charts"),
@@ -366,8 +368,36 @@ app.layout = dbc.Container([
         dbc.Tab(label="⚙️ 模型調參", tab_id="tab-model"),
     ], id="main-tabs", active_tab="tab-live", className="mb-4"),
     html.Div(id="tab-content"),
-    dcc.Interval(id="live-interval", interval=120 * 1000)
+    dcc.Interval(id="live-interval", interval=120 * 1000)  # 2分鐘刷新
 ], fluid=True)
+
+# ---------- 統計數字回調 (用於頂部卡片) ----------
+@app.callback(
+    [Output("stat-matches", "children"),
+     Output("stat-leagues", "children"),
+     Output("stat-advice", "children"),
+     Output("stat-news", "children")],
+    Input("live-interval", "n_intervals")
+)
+def update_stats(n):
+    matches = fetch_live_data()
+    cnt = len(matches)
+    leagues = len(set(m["league"] for m in matches))
+    # 取第一場的推薦
+    if matches:
+        m = matches[0]
+        p_h, p_d, p_a = compute_probs(1.65*team_strength(m['home']), 1.20*team_strength(m['away']))
+        k_h, k_d, k_a = kelly(p_h, m['odds'][0]), kelly(p_d, m['odds'][1]), kelly(p_a, m['odds'][2])
+        best = max(k_h, k_d, k_a)
+        if best == k_h: adv = f"主勝 {best:.0%}"
+        elif best == k_d: adv = f"和局 {best:.0%}"
+        else: adv = f"客勝 {best:.0%}"
+    else:
+        adv = "無"
+    # 新聞數量
+    news = fetch_news()
+    news_cnt = len(news)
+    return str(cnt), str(leagues), adv, f"{news_cnt} 則"
 
 # ---------- 分頁切換 ----------
 @app.callback(
@@ -460,8 +490,7 @@ def fill_dropdown(active):
     prevent_initial_call=True
 )
 def update_charts(idx):
-    if idx is None:
-        raise PreventUpdate
+    if idx is None: raise PreventUpdate
     matches = fetch_live_data()
     m = matches[idx]
     lh = 1.65 * team_strength(m['home'])
@@ -479,8 +508,7 @@ def update_charts(idx):
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(x=goals, y=hd, name="主隊", marker_color="#0d6efd"))
     fig2.add_trace(go.Bar(x=goals, y=ad, name="客隊", marker_color="#dc3545"))
-    fig2.update_layout(barmode="group", template="plotly_dark", yaxis_tickformat=".0%",
-                       xaxis_title="進球數", yaxis_title="概率")
+    fig2.update_layout(barmode="group", template="plotly_dark", yaxis_tickformat=".0%")
 
     sc = scorelines(lh, la)
     heat_df = pd.DataFrame(sc, columns=["比分", "概率"])
@@ -497,8 +525,7 @@ def update_charts(idx):
     Input("team-search", "value")
 )
 def search_team(q):
-    if not q:
-        return html.P("請輸入關鍵詞", className="text-muted")
+    if not q: return html.P("請輸入關鍵詞", className="text-muted")
     real = fetch_team_stats(q)
     if real:
         return dbc.Row([dbc.Col(dbc.Card(dbc.CardBody([
@@ -508,7 +535,7 @@ def search_team(q):
             dbc.Progress(value=real["attack"], label="攻擊力", color="danger", className="mb-1"),
             dbc.Progress(value=real["defense"], label="防守力", color="success"),
         ]), className="mb-2 bg-dark"), width=4)])
-    # 備援模擬數據
+    # 模擬後備
     mock_db = [
         {"name": "曼城", "attack": 92, "defense": 88, "possession": 65},
         {"name": "阿森納", "attack": 85, "defense": 84, "possession": 58},
@@ -517,8 +544,7 @@ def search_team(q):
         {"name": "拜仁", "attack": 93, "defense": 89, "possession": 64},
     ]
     results = [t for t in mock_db if q.lower() in t['name'].lower()]
-    if not results:
-        return html.P("找不到匹配球隊", className="text-danger")
+    if not results: return html.P("找不到匹配球隊", className="text-danger")
     return dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([
             html.H5(t["name"]),
@@ -534,8 +560,7 @@ def search_team(q):
     Input("league-select", "value")
 )
 def show_standings(league):
-    if not league:
-        return html.P("請選擇聯賽", className="text-muted")
+    if not league: return html.P("請選擇聯賽", className="text-muted")
     data = fetch_standings(league)
     if data:
         df = pd.DataFrame(data)
@@ -548,16 +573,14 @@ def show_standings(league):
     Input("main-tabs", "active_tab")
 )
 def show_news(active):
-    if active != "tab-news":
-        raise PreventUpdate
+    if active != "tab-news": raise PreventUpdate
     articles = fetch_news()
-    if not articles:
-        return html.P("目前沒有新聞", className="text-muted")
+    if not articles: return html.P("目前沒有新聞", className="text-muted")
     return html.Div([
         dbc.Card(
             dbc.CardBody([
                 html.H5(a["title"], className="text-info"),
-                html.P(f"來源: {a['source']}", className="text-muted small"),
+                html.P([html.Small(f"來源: {a['source']} · {a['publishedAt']}")], className="text-muted"),
                 html.A("閱讀全文", href=a["url"], target="_blank", className="btn btn-sm btn-outline-info")
             ]),
             className="mb-2 bg-dark"
@@ -570,13 +593,11 @@ def show_news(active):
     Input("main-tabs", "active_tab")
 )
 def load_history(active):
-    if active != "tab-history":
-        raise PreventUpdate
+    if active != "tab-history": raise PreventUpdate
     conn = sqlite3.connect('zeus_quant.db')
     df = pd.read_sql_query("SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50", conn)
     conn.close()
-    if df.empty:
-        return html.P("暫無歷史記錄", className="text-muted")
+    if df.empty: return html.P("暫無歷史記錄", className="text-muted")
     return dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, dark=True)
 
 # ---------- 模型調參 ----------
@@ -585,8 +606,7 @@ def load_history(active):
     [Input("model-lh", "value"), Input("model-la", "value"), Input("model-mg", "value")]
 )
 def model_sim(lh, la, mg):
-    if None in (lh, la, mg):
-        raise PreventUpdate
+    if None in (lh, la, mg): raise PreventUpdate
     ph, pd_, pa = compute_probs(lh, la, mg)
     tops = scorelines(lh, la, mg)[:4]
     return dbc.Card(dbc.CardBody([
