@@ -1,4 +1,15 @@
 import os
+print("========== API 金鑰診斷 ==========")
+keys = ["ODDS_API_KEY", "SPORTMONKS_API_KEY", "SPORTS_API_KEY", "APIFOOTBALL_API_KEY",
+        "FOOTBALL_DATA_API_KEY", "NEWS_API_KEY", "SERPAPI_KEY", "RAPIDAPI_KEY"]
+for k in keys:
+    val = os.environ.get(k)
+    if val:
+        print(f"✅ {k} 長度: {len(val)}, 前4碼: {val[:4]}")
+    else:
+        print(f"❌ {k} 未設定或為 None")
+print("==================================")
+import os
 import math
 import random
 import hashlib
