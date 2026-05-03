@@ -1,4 +1,42 @@
 import os
+import sys
+print("===== APP STARTUP =====", flush=True)
+print("Python:", sys.version, flush=True)
+
+# 检查环境变量
+_keys = ["ODDS_API_KEY", "SPORTMONKS_API_KEY", "SPORTS_API_KEY",
+         "APIFOOTBALL_API_KEY", "FOOTBALL_DATA_API_KEY",
+         "NEWS_API_KEY", "SERPAPI_KEY", "RAPIDAPI_KEY"]
+for k in _keys:
+    v = os.environ.get(k)
+    if v:
+        print(f"ENV {k}: {v[:4]}*** (长度{len(v)})", flush=True)
+    else:
+        print(f"ENV {k}: 未设置", flush=True)
+
+# 立即测试 Odds API
+odds_key = os.environ.get("ODDS_API_KEY")
+if odds_key:
+    try:
+        import requests
+        resp = requests.get(
+            "https://api.the-odds-api.com/v4/sports/soccer/odds/",
+            params={"apiKey": odds_key, "regions": "eu", "markets": "h2h", "oddsFormat": "decimal"},
+            timeout=15
+        )
+        print(f"ODDS API 状态码: {resp.status_code}", flush=True)
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"ODDS API 返回比赛数: {len(data)}", flush=True)
+            if data:
+                # 打印第一场比赛的赔率作为验证
+                first = data[0]
+                print(f"第一场: {first.get('home_team')} vs {first.get('away_team')}", flush=True)
+        else:
+            print(f"ODDS API 响应内容: {resp.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"ODDS API 调用失败: {e}", flush=True)
+print("===== DIAGNOSTICS DONE =====", flush=True)
 print("========== API 金鑰診斷 ==========")
 keys = ["ODDS_API_KEY", "SPORTMONKS_API_KEY", "SPORTS_API_KEY", "APIFOOTBALL_API_KEY",
         "FOOTBALL_DATA_API_KEY", "NEWS_API_KEY", "SERPAPI_KEY", "RAPIDAPI_KEY"]
