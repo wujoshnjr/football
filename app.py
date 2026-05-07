@@ -1,11 +1,9 @@
-import os, sys
-print("===== APP STARTUP =====", flush=True)
-
+import os
 import math
 import random
 import hashlib
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import dash
 from dash import dcc, html, Input, Output
@@ -16,20 +14,19 @@ import plotly.graph_objects as go
 import pandas as pd
 import requests
 
-# ---------- 啟動時立即診斷環境變數 ----------
-print("----- 環境變數檢查 -----")
+# ---------- 啟動診斷 (僅顯示設定狀態) ----------
+print("===== APP STARTUP =====", flush=True)
 _keys = [
     "ODDS_API_KEY", "SPORTMONKS_API_KEY", "SPORTS_API_KEY",
     "APIFOOTBALL_API_KEY", "FOOTBALL_DATA_API_KEY",
     "NEWS_API_KEY", "SERPAPI_KEY", "RAPIDAPI_KEY"
 ]
 for k in _keys:
-    v = os.environ.get(k)
-    if v:
-        print(f"✅ {k}: {v[:4]}... (長度{len(v)})", flush=True)
+    if os.environ.get(k):
+        print(f"✅ {k} 已設定", flush=True)
     else:
-        print(f"❌ {k}: 未設定", flush=True)
-print("------------------------")
+        print(f"❌ {k} 未設定", flush=True)
+print("------------------------", flush=True)
 
 # ---------- Dash 初始化 ----------
 app = dash.Dash(
@@ -90,8 +87,47 @@ def kelly(p, odds):
     f = (p * b - (1 - p)) / b
     return max(0.0, min(f, 0.25))
 
+# ---------- 真實強度系統 (基於聯賽排名) ----------
+standings_cache = {}
+
+def load_standings():
+    global standings_cache
+    if standings_cache and standings_cache.get("timestamp") > datetime.now() - timedelta(hours=1):
+        return standings_cache
+    fd_key = os.environ.get("FOOTBALL_DATA_API_KEY")
+    if not fd_key:
+        return {}
+    headers = {"X-Auth-Token": fd_key}
+    standings = {}
+    for code in ["PL", "PD", "BL1", "SA", "FL1"]:
+        try:
+            url = f"https://api.football-data.org/v4/competitions/{code}/standings"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json().get("standings", [])
+                for table in data:
+                    if table["type"] == "TOTAL":
+                        for row in table["table"]:
+                            name = row["team"]["name"]
+                            standings[name] = row["position"]
+        except Exception:
+            pass
+    standings["timestamp"] = datetime.now()
+    standings_cache = standings
+    return standings
+
 def team_strength(name):
+    standings = load_standings()
+    if name in standings:
+        rank = standings[name]
+        return 0.7 + (21 - rank) / 20 * 0.6
     return 0.80 + (int(hashlib.md5(name.encode()).hexdigest()[:8], 16) % 46) / 100.0
+
+def compute_lambdas(home, away):
+    base = 1.4
+    h_str = team_strength(home)
+    a_str = team_strength(away)
+    return base * h_str * 1.05, base * a_str * 0.95
 
 # ---------- 演示數據 ----------
 def get_demo_matches():
@@ -104,31 +140,25 @@ def get_demo_matches():
         {"league": "英超", "home": "利物浦", "away": "車路士", "odds": [1.95, 3.50, 3.80]},
     ]
 
-# ---------- API 整合區 ----------
+# ---------- API 整合 (各模組皆提供狀態回傳) ----------
 def fetch_live_data():
-    """取得即時比賽數據：優先使用 Odds API，失敗則用 Football-Data 備援，再失敗用演示數據"""
-    # 1. Odds API
+    """回傳 (matches, source_status)"""
     odds_key = os.environ.get("ODDS_API_KEY")
     if odds_key:
-        print("[診斷] 嘗試 Odds API ...", flush=True)
         try:
             url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
             resp = requests.get(url, params={
                 "apiKey": odds_key, "regions": "eu", "markets": "h2h", "oddsFormat": "decimal"
             }, timeout=10)
-            print(f"[診斷] Odds API 狀態碼: {resp.status_code}", flush=True)
             if resp.status_code == 200:
                 data = resp.json()
                 matches = []
                 for g in data:
                     home = g.get("home_team")
                     away = g.get("away_team")
-                    if not home or not away:
-                        continue
+                    if not home or not away: continue
                     book = g.get("bookmakers", [])
-                    if not book:
-                        continue
-                    # outcomes 是列表，例如 [{"name":"FC Machida Zelvia","price":3.51}, ...]
+                    if not book: continue
                     outcomes = book[0]["markets"][0]["outcomes"]
                     odds_dict = {o["name"]: o["price"] for o in outcomes}
                     if home in odds_dict and away in odds_dict and "Draw" in odds_dict:
@@ -139,81 +169,53 @@ def fetch_live_data():
                             "odds": [odds_dict[home], odds_dict["Draw"], odds_dict[away]]
                         })
                 if matches:
-                    print(f"[診斷] Odds API 成功取得 {len(matches)} 場比賽", flush=True)
-                    return matches
+                    return matches, f"✅ Odds API - {len(matches)} 場"
                 else:
-                    print("[診斷] Odds API 未取得任何有效比賽", flush=True)
+                    return get_demo_matches(), "⚠️ Odds API 無有效賽事，使用演示數據"
             else:
-                print(f"[診斷] Odds API 錯誤: {resp.text[:150]}", flush=True)
+                return get_demo_matches(), f"❌ Odds API 錯誤 ({resp.status_code})，使用演示數據"
         except Exception as e:
-            print(f"[診斷] Odds API 異常: {e}", flush=True)
-
-    # 2. Football-Data.org 備援
+            return get_demo_matches(), f"❌ Odds API 異常，使用演示數據"
+    # 備援 Football-Data
     football_key = os.environ.get("FOOTBALL_DATA_API_KEY")
     if football_key:
-        print("[診斷] 降級至 Football-Data.org ...", flush=True)
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             url = "https://api.football-data.org/v4/matches"
             headers = {"X-Auth-Token": football_key}
             params = {"dateFrom": today, "dateTo": today, "status": "SCHEDULED"}
             resp = requests.get(url, headers=headers, params=params, timeout=10)
-            print(f"[診斷] Football-Data 狀態碼: {resp.status_code}", flush=True)
             if resp.status_code == 200:
                 matches_data = resp.json().get("matches", [])
                 matches = []
                 for m in matches_data:
-                    home = m["homeTeam"]["name"]
-                    away = m["awayTeam"]["name"]
-                    league = m["competition"]["name"]
-                    # 隨機模擬賠率
                     matches.append({
-                        "league": league,
-                        "home": home,
-                        "away": away,
+                        "league": m["competition"]["name"],
+                        "home": m["homeTeam"]["name"],
+                        "away": m["awayTeam"]["name"],
                         "odds": [round(random.uniform(1.5, 2.8), 2),
                                  round(random.uniform(3.0, 4.0), 2),
                                  round(random.uniform(2.5, 5.0), 2)]
                     })
                 if matches:
-                    print(f"[診斷] Football-Data 取得 {len(matches)} 場比賽", flush=True)
-                    return matches
-        except Exception as e:
-            print(f"[診斷] Football-Data 異常: {e}", flush=True)
-
-    # 3. 最終降級
-    print("[診斷] 所有 API 皆不可用，使用演示數據", flush=True)
-    return get_demo_matches()
-
-def fetch_team_stats(team_name):
-    """取得個別球隊數據 (目前為演示邏輯，可接入更多 API)"""
-    # Sports API 嘗試
-    sports_key = os.environ.get("SPORTS_API_KEY")
-    if sports_key:
-        try:
-            url = "https://api.sportsdata.io/v3/soccer/scores/json/Teams"
-            headers = {"Ocp-Apim-Subscription-Key": sports_key}
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                for team in resp.json():
-                    if team.get("Name", "").lower() == team_name.lower():
-                        return {
-                            "name": team["Name"],
-                            "attack": team.get("OffensiveRating", random.randint(75, 95)),
-                            "defense": team.get("DefensiveRating", random.randint(75, 95)),
-                            "possession": team.get("PossessionPct", random.randint(45, 65))
-                        }
-        except: pass
-    # 若都沒有，返回 None，由 search_team 使用模擬資料
-    return None
+                    return matches, f"✅ Football-Data 賽程備援 - {len(matches)} 場 (模擬賠率)"
+                else:
+                    return get_demo_matches(), "⚠️ Football-Data 無賽程，使用演示數據"
+            else:
+                return get_demo_matches(), f"❌ Football-Data 錯誤 ({resp.status_code})，使用演示數據"
+        except Exception:
+            return get_demo_matches(), "❌ Football-Data 異常，使用演示數據"
+    return get_demo_matches(), "🔸 無 API 可用，使用演示數據"
 
 def fetch_standings(league_name):
     fd_key = os.environ.get("FOOTBALL_DATA_API_KEY")
-    if not fd_key: return None
+    if not fd_key:
+        return None, "❌ FOOTBALL_DATA_API_KEY 未設定"
     try:
         league_codes = {"英超": "PL", "西甲": "PD", "德甲": "BL1", "意甲": "SA", "法甲": "FL1"}
         code = league_codes.get(league_name)
-        if not code: return None
+        if not code:
+            return None, "不支援的聯賽"
         url = f"https://api.football-data.org/v4/competitions/{code}/standings"
         headers = {"X-Auth-Token": fd_key}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -230,27 +232,31 @@ def fetch_standings(league_name):
                             "積分": row["points"],
                             "得失差": row["goalDifference"]
                         })
-            return standings[:10]
-    except: pass
-    return None
+            return standings[:10], f"✅ Football-Data - {league_name}"
+        else:
+            return None, f"❌ API 錯誤 ({resp.status_code})"
+    except Exception as e:
+        return None, f"❌ 請求異常: {str(e)[:50]}"
 
 def fetch_news():
     news_key = os.environ.get("NEWS_API_KEY")
-    if news_key:
-        try:
-            url = "https://newsapi.org/v2/everything"
-            params = {"q": "football OR soccer", "apiKey": news_key, "pageSize": 5, "sortBy": "publishedAt"}
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 200:
-                articles = resp.json().get("articles", [])
-                return [{"title": a["title"], "source": a["source"]["name"], "url": a["url"], "publishedAt": a["publishedAt"][:10]} for a in articles]
-        except: pass
-    return []
+    if not news_key:
+        return [], "❌ NEWS_API_KEY 未設定"
+    try:
+        url = "https://newsapi.org/v2/everything"
+        params = {"q": "football OR soccer", "apiKey": news_key, "pageSize": 5, "sortBy": "publishedAt"}
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code == 200:
+            articles = resp.json().get("articles", [])
+            return [{"title": a["title"], "source": a["source"]["name"], "url": a["url"], "publishedAt": a["publishedAt"][:10]} for a in articles], "✅ News API"
+        else:
+            return [], f"❌ News API 錯誤 ({resp.status_code})"
+    except Exception as e:
+        return [], f"❌ News API 異常"
 
 # ---------- 卡片 UI ----------
 def create_match_card(match):
-    lambda_h = 1.65 * team_strength(match['home'])
-    lambda_a = 1.20 * team_strength(match['away'])
+    lambda_h, lambda_a = compute_lambdas(match['home'], match['away'])
     p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
     odds = match['odds']
     val_h = p_h * odds[0] - 1
@@ -312,6 +318,7 @@ def create_match_card(match):
 # ---------- 佈局 ----------
 app.layout = dbc.Container([
     html.H1("ZEUS QUANT", className="text-info fw-bold my-3"),
+    html.Div(id="data-source-alert", className="mb-3"),
     dbc.Row([
         dbc.Col(dbc.Card([html.H5("賽事數", className="text-info"), html.H3(id="stat-matches")], body=True, color="dark"), width=3),
         dbc.Col(dbc.Card([html.H5("即時聯賽", className="text-info"), html.H3(id="stat-leagues")], body=True, color="dark"), width=3),
@@ -328,11 +335,25 @@ app.layout = dbc.Container([
         dbc.Tab(label="⚙️ 模型調參", tab_id="tab-model"),
     ], id="main-tabs", active_tab="tab-live", className="mb-4"),
     html.Div(id="tab-content"),
-    # 每30分鐘自動刷新一次，節省 API 配額
-    dcc.Interval(id="live-interval", interval=30 * 60 * 1000)
+    dcc.Interval(id="live-interval", interval=30 * 60 * 1000),
+    html.Footer([
+        html.Hr(),
+        html.P("⚠️ 本網站僅供數據分析與學術研究，不構成任何投注建議。請遵守當地法律，理性看待預測結果。",
+               className="text-muted small")
+    ], className="mt-4")
 ], fluid=True)
 
 # ---------- 回調 ----------
+@app.callback(
+    Output("data-source-alert", "children"),
+    Input("live-interval", "n_intervals")
+)
+def update_data_alert(n):
+    _, status = fetch_live_data()
+    if "演示" in status:
+        return dbc.Alert(status, color="warning")
+    return dbc.Alert(status, color="info")
+
 @app.callback(
     [Output("stat-matches", "children"),
      Output("stat-leagues", "children"),
@@ -341,12 +362,13 @@ app.layout = dbc.Container([
     Input("live-interval", "n_intervals")
 )
 def update_stats(n):
-    matches = fetch_live_data()
+    matches, _ = fetch_live_data()
     cnt = len(matches)
     leagues = len(set(m["league"] for m in matches))
     if matches:
         m = matches[0]
-        p_h, p_d, p_a = compute_probs(1.65*team_strength(m['home']), 1.20*team_strength(m['away']))
+        lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
+        p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
         k_h, k_d, k_a = kelly(p_h, m['odds'][0]), kelly(p_d, m['odds'][1]), kelly(p_a, m['odds'][2])
         best = max(k_h, k_d, k_a)
         if best == k_h: adv = f"主勝 {best:.0%}"
@@ -354,9 +376,8 @@ def update_stats(n):
         else: adv = f"客勝 {best:.0%}"
     else:
         adv = "無"
-    news = fetch_news()
-    news_cnt = len(news)
-    return str(cnt), str(leagues), adv, f"{news_cnt} 則"
+    news, _ = fetch_news()
+    return str(cnt), str(leagues), adv, f"{len(news)} 則"
 
 @app.callback(
     Output("tab-content", "children"),
@@ -407,11 +428,12 @@ def render_tab(active):
     Input("live-interval", "n_intervals")
 )
 def update_cards(n):
-    matches = fetch_live_data()
+    matches, _ = fetch_live_data()
     cards = [create_match_card(m) for m in matches]
     if matches:
         m = matches[0]
-        p_h, p_d, p_a = compute_probs(1.65 * team_strength(m['home']), 1.20 * team_strength(m['away']))
+        lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
+        p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
         save_prediction(m, (p_h, p_d, p_a), "自動保存")
     return cards
 
@@ -427,10 +449,171 @@ def save_prediction(match, probs, advice):
     conn.commit()
     conn.close()
 
-# 其他圖表、搜尋、積分榜、歷史等回調保持與之前版本一致，此處省略部分以避免過長，您可沿用上一版本的完整內容。
-# 若需要，我可以提供完整的剩餘回調代碼。
+# ---------- 新聞分頁 ----------
+@app.callback(
+    Output("news-container", "children"),
+    Input("main-tabs", "active_tab")
+)
+def show_news(active):
+    if active != "tab-news":
+        raise PreventUpdate
+    articles, status = fetch_news()
+    alert = dbc.Alert(status, color="info" if "❌" not in status else "danger", className="mb-2")
+    if not articles:
+        return html.Div([alert, html.P("目前沒有新聞。", className="text-muted")])
+    return html.Div([alert] + [
+        dbc.Card(
+            dbc.CardBody([
+                html.H5(a["title"], className="text-info"),
+                html.P(f"{a['source']} · {a['publishedAt']}", className="text-muted small"),
+                html.A("閱讀全文", href=a["url"], target="_blank", className="btn btn-sm btn-outline-info")
+            ]),
+            className="mb-2 bg-dark"
+        ) for a in articles
+    ])
 
+# ---------- 圖表下拉 ----------
+@app.callback(
+    Output("chart-match-select", "options"),
+    Input("main-tabs", "active_tab")
+)
+def fill_dropdown(active):
+    if active != "tab-charts":
+        raise PreventUpdate
+    matches, _ = fetch_live_data()
+    return [{"label": f"{m['home']} vs {m['away']} ({m['league']})", "value": i} for i, m in enumerate(matches)]
+
+# ---------- 深度圖表 ----------
+@app.callback(
+    [Output("prob-bar-chart", "figure"),
+     Output("goal-dist-chart", "figure"),
+     Output("scoreline-heatmap", "figure")],
+    Input("chart-match-select", "value"),
+    prevent_initial_call=True
+)
+def update_charts(idx):
+    if idx is None:
+        raise PreventUpdate
+    matches, _ = fetch_live_data()
+    m = matches[idx]
+    lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
+    ph, pd_, pa = compute_probs(lambda_h, lambda_a)
+
+    fig1 = px.bar(x=["主勝", "和局", "客勝"], y=[ph, pd_, pa],
+                  text=[f"{v:.1%}" for v in [ph, pd_, pa]],
+                  color_discrete_sequence=["#0d6efd", "#6c757d", "#dc3545"])
+    fig1.update_layout(template="plotly_dark", yaxis_tickformat=".0%")
+
+    goals = list(range(0, 9))
+    hd = [poisson_pmf(k, lambda_h) for k in goals]
+    ad = [poisson_pmf(k, lambda_a) for k in goals]
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(x=goals, y=hd, name="主隊", marker_color="#0d6efd"))
+    fig2.add_trace(go.Bar(x=goals, y=ad, name="客隊", marker_color="#dc3545"))
+    fig2.update_layout(barmode="group", template="plotly_dark", yaxis_tickformat=".0%")
+
+    sc = scorelines(lambda_h, lambda_a)
+    heat_df = pd.DataFrame(sc, columns=["比分", "概率"])
+    heat_df[['主', '客']] = heat_df['比分'].str.split('-', expand=True).astype(int)
+    fig3 = px.density_heatmap(heat_df, x="主", y="客", z="概率", color_continuous_scale="blues")
+    fig3.update_layout(template="plotly_dark")
+    return fig1, fig2, fig3
+
+# ---------- 球隊搜尋 ----------
+@app.callback(
+    Output("team-search-results", "children"),
+    Input("team-search", "value")
+)
+def search_team(q):
+    if not q:
+        return html.P("請輸入關鍵詞", className="text-muted")
+    # 先嘗試 Sports API
+    sports_key = os.environ.get("SPORTS_API_KEY")
+    if sports_key:
+        try:
+            url = "https://api.sportsdata.io/v3/soccer/scores/json/Teams"
+            headers = {"Ocp-Apim-Subscription-Key": sports_key}
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                teams = resp.json()
+                for team in teams:
+                    if q.lower() in team.get("Name", "").lower():
+                        return dbc.Row([dbc.Col(dbc.Card(dbc.CardBody([
+                            html.H5(team["Name"]),
+                            html.P(f"進攻: {team.get('OffensiveRating', '?')} | 防守: {team.get('DefensiveRating', '?')}"),
+                        ]), className="mb-2 bg-dark"), width=4)])
+        except Exception:
+            pass
+    # 降級模擬
+    mock_db = [
+        {"name": "曼城", "attack": 92, "defense": 88},
+        {"name": "阿森納", "attack": 85, "defense": 84},
+        {"name": "皇馬", "attack": 90, "defense": 86},
+        {"name": "巴塞", "attack": 88, "defense": 82},
+        {"name": "拜仁", "attack": 93, "defense": 89},
+    ]
+    results = [t for t in mock_db if q.lower() in t['name'].lower()]
+    if not results:
+        return html.P("找不到匹配球隊（模擬模式）", className="text-danger")
+    return dbc.Row([
+        dbc.Col(dbc.Card(dbc.CardBody([
+            html.H5(t["name"]),
+            html.P(f"進攻: {t['attack']} | 防守: {t['defense']}"),
+        ]), className="mb-2 bg-dark"), width=4) for t in results
+    ])
+
+# ---------- 聯賽積分榜 ----------
+@app.callback(
+    Output("standings-table", "children"),
+    Input("league-select", "value")
+)
+def show_standings(league):
+    if not league:
+        return html.P("請選擇聯賽", className="text-muted")
+    data, status = fetch_standings(league)
+    alert = dbc.Alert(status, color="info" if "✅" in status else "danger", className="mb-2")
+    if data:
+        df = pd.DataFrame(data)
+        table = dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, dark=True)
+        return html.Div([alert, table])
+    return html.Div([alert, html.P("無法取得積分榜，請稍後再試。")])
+
+# ---------- 歷史歸檔 ----------
+@app.callback(
+    Output("history-table", "children"),
+    Input("main-tabs", "active_tab")
+)
+def load_history(active):
+    if active != "tab-history":
+        raise PreventUpdate
+    conn = sqlite3.connect('zeus_quant.db')
+    df = pd.read_sql_query("SELECT * FROM predictions ORDER BY timestamp DESC LIMIT 50", conn)
+    conn.close()
+    if df.empty:
+        return html.P("暫無歷史記錄", className="text-muted")
+    return dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, dark=True)
+
+# ---------- 模型調參 ----------
+@app.callback(
+    Output("model-output", "children"),
+    [Input("model-lh", "value"), Input("model-la", "value"), Input("model-mg", "value")]
+)
+def model_sim(lh, la, mg):
+    if None in (lh, la, mg):
+        raise PreventUpdate
+    ph, pd_, pa = compute_probs(lh, la, mg)
+    tops = scorelines(lh, la, mg)[:4]
+    return dbc.Card(dbc.CardBody([
+        html.H5("模擬結果", className="text-info"),
+        dbc.Row([
+            dbc.Col(html.H3(f"主勝 {ph:.2%}", className="text-primary")),
+            dbc.Col(html.H3(f"和局 {pd_:.2%}", className="text-secondary")),
+            dbc.Col(html.H3(f"客勝 {pa:.2%}", className="text-danger")),
+        ]),
+        html.P("最可能波膽: " + " · ".join([f"{s[0]} ({s[1] * 100:.1f}%)" for s in tops]))
+    ]), className="bg-dark")
+
+# ---------- 啟動 ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    print(f"===== 開始運行於端口 {port} =====", flush=True)
     app.run(debug=False, host="0.0.0.0", port=port)
