@@ -142,7 +142,6 @@ def get_demo_matches():
 
 # ---------- API 整合 ----------
 def fetch_live_data():
-    """回傳 (matches, status_message)"""
     odds_key = os.environ.get("ODDS_API_KEY")
     if odds_key:
         try:
@@ -170,10 +169,9 @@ def fetch_live_data():
                         })
                 if matches:
                     return matches, f"✅ Odds API - {len(matches)} 場"
-                else:
-                    return get_demo_matches(), "⚠️ Odds API 無有效賽事，使用演示數據"
         except Exception:
             pass
+
     football_key = os.environ.get("FOOTBALL_DATA_API_KEY")
     if football_key:
         try:
@@ -196,8 +194,6 @@ def fetch_live_data():
                     })
                 if matches:
                     return matches, f"✅ Football-Data 備援 - {len(matches)} 場 (模擬賠率)"
-                else:
-                    return get_demo_matches(), "⚠️ 無賽程，使用演示數據"
         except Exception:
             pass
     return get_demo_matches(), "🔸 無 API，使用演示數據"
@@ -249,66 +245,77 @@ def fetch_news():
     except Exception:
         return [], "❌ News API 異常"
 
-# ---------- 卡片 UI ----------
+# ---------- 卡片 UI（含錯誤保護）----------
 def create_match_card(match):
-    lambda_h, lambda_a = compute_lambdas(match['home'], match['away'])
-    p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
-    odds = match['odds']
-    val_h = p_h * odds[0] - 1
-    val_d = p_d * odds[1] - 1
-    val_a = p_a * odds[2] - 1
-    k_h = kelly(p_h, odds[0])
-    k_d = kelly(p_d, odds[1])
-    k_a = kelly(p_a, odds[2])
-    top_score = scorelines(lambda_h, lambda_a)
-    best = max(k_h, k_d, k_a)
-    if best < 0.01:
-        advice = "⚖️ 觀望"
-        advice_color = "secondary"
-    else:
-        if best == k_h:
-            advice = f"📈 凱利推薦: 主勝 ({best * 100:.1f}%)"
-            advice_color = "success"
-        elif best == k_d:
-            advice = f"📈 凱利推薦: 和局 ({best * 100:.1f}%)"
-            advice_color = "warning"
+    try:
+        lambda_h, lambda_a = compute_lambdas(match['home'], match['away'])
+        p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
+        odds = match['odds']
+        val_h = p_h * odds[0] - 1
+        val_d = p_d * odds[1] - 1
+        val_a = p_a * odds[2] - 1
+        k_h = kelly(p_h, odds[0])
+        k_d = kelly(p_d, odds[1])
+        k_a = kelly(p_a, odds[2])
+        top_score = scorelines(lambda_h, lambda_a)
+        best = max(k_h, k_d, k_a)
+        if best < 0.01:
+            advice = "⚖️ 觀望"
+            advice_color = "secondary"
         else:
-            advice = f"📈 凱利推薦: 客勝 ({best * 100:.1f}%)"
-            advice_color = "danger"
+            if best == k_h:
+                advice = f"📈 凱利推薦: 主勝 ({best * 100:.1f}%)"
+                advice_color = "success"
+            elif best == k_d:
+                advice = f"📈 凱利推薦: 和局 ({best * 100:.1f}%)"
+                advice_color = "warning"
+            else:
+                advice = f"📈 凱利推薦: 客勝 ({best * 100:.1f}%)"
+                advice_color = "danger"
 
-    return dbc.Card(
-        dbc.CardBody([
-            html.Div([
-                html.Span(f"🏆 {match['league']}", className="badge bg-info me-2"),
-                html.Small(f"λ主 {lambda_h:.2f} / λ客 {lambda_a:.2f} · 信心 {min(p_h,p_d,p_a)*100:.0f}%", className="text-muted")
-            ], className="mb-2"),
-            html.H4(f"{match['home']}  vs  {match['away']}", className="text-light"),
-            dbc.Row([
-                dbc.Col(html.Div([
-                    html.Div("主勝", className="text-uppercase text-muted small"),
-                    html.H5(f"{p_h:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[0]} · 值 {val_h:+.2f}")
-                ]), width=4),
-                dbc.Col(html.Div([
-                    html.Div("和局", className="text-uppercase text-muted small"),
-                    html.H5(f"{p_d:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[1]} · 值 {val_d:+.2f}")
-                ]), width=4),
-                dbc.Col(html.Div([
-                    html.Div("客勝", className="text-uppercase text-muted small"),
-                    html.H5(f"{p_a:.1%}", className="text-info"),
-                    html.Small(f"賠 {odds[2]} · 值 {val_a:+.2f}")
-                ]), width=4),
-            ], className="my-2"),
-            dbc.Progress(value=k_h * 100, label=f"凱利主 {k_h:.1%}", color="success", className="mb-1"),
-            dbc.Progress(value=k_d * 100, label=f"凱利和 {k_d:.1%}", color="warning", className="mb-1"),
-            dbc.Progress(value=k_a * 100, label=f"凱利客 {k_a:.1%}", color="danger"),
-            html.P(advice, className=f"mt-2 fw-bold text-{advice_color}"),
-            html.Div("🎯 波膽: " + " · ".join([f"{s[0]} ({s[1] * 100:.1f}%)" for s in top_score[:4]]),
-                     className="small text-muted"),
-        ]),
-        className="mb-3 bg-dark border-secondary shadow"
-    )
+        return dbc.Card(
+            dbc.CardBody([
+                html.Div([
+                    html.Span(f"🏆 {match['league']}", className="badge bg-info me-2"),
+                    html.Small(f"λ主 {lambda_h:.2f} / λ客 {lambda_a:.2f} · 信心 {min(p_h,p_d,p_a)*100:.0f}%", className="text-muted")
+                ], className="mb-2"),
+                html.H4(f"{match['home']}  vs  {match['away']}", className="text-light"),
+                dbc.Row([
+                    dbc.Col(html.Div([
+                        html.Div("主勝", className="text-uppercase text-muted small"),
+                        html.H5(f"{p_h:.1%}", className="text-info"),
+                        html.Small(f"賠 {odds[0]} · 值 {val_h:+.2f}")
+                    ]), width=4),
+                    dbc.Col(html.Div([
+                        html.Div("和局", className="text-uppercase text-muted small"),
+                        html.H5(f"{p_d:.1%}", className="text-info"),
+                        html.Small(f"賠 {odds[1]} · 值 {val_d:+.2f}")
+                    ]), width=4),
+                    dbc.Col(html.Div([
+                        html.Div("客勝", className="text-uppercase text-muted small"),
+                        html.H5(f"{p_a:.1%}", className="text-info"),
+                        html.Small(f"賠 {odds[2]} · 值 {val_a:+.2f}")
+                    ]), width=4),
+                ], className="my-2"),
+                dbc.Progress(value=k_h * 100, label=f"凱利主 {k_h:.1%}", color="success", className="mb-1"),
+                dbc.Progress(value=k_d * 100, label=f"凱利和 {k_d:.1%}", color="warning", className="mb-1"),
+                dbc.Progress(value=k_a * 100, label=f"凱利客 {k_a:.1%}", color="danger"),
+                html.P(advice, className=f"mt-2 fw-bold text-{advice_color}"),
+                html.Div("🎯 波膽: " + " · ".join([f"{s[0]} ({s[1] * 100:.1f}%)" for s in top_score[:4]]),
+                         className="small text-muted"),
+            ]),
+            className="mb-3 bg-dark border-secondary shadow"
+        )
+    except Exception as e:
+        # 卡片發生錯誤時顯示錯誤卡片
+        return dbc.Card(
+            dbc.CardBody([
+                html.H5("卡片渲染錯誤", className="text-danger"),
+                html.P(f"{match.get('home','?')} vs {match.get('away','?')}"),
+                html.Small(str(e))
+            ]),
+            className="mb-3 bg-dark border-danger"
+        )
 
 # ---------- 佈局 ----------
 app.layout = dbc.Container([
@@ -360,13 +367,16 @@ def update_stats(n):
     leagues = len(set(m["league"] for m in matches))
     if matches:
         m = matches[0]
-        lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
-        p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
-        k_h, k_d, k_a = kelly(p_h, m['odds'][0]), kelly(p_d, m['odds'][1]), kelly(p_a, m['odds'][2])
-        best = max(k_h, k_d, k_a)
-        if best == k_h: adv = f"主勝 {best:.0%}"
-        elif best == k_d: adv = f"和局 {best:.0%}"
-        else: adv = f"客勝 {best:.0%}"
+        try:
+            lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
+            p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
+            k_h, k_d, k_a = kelly(p_h, m['odds'][0]), kelly(p_d, m['odds'][1]), kelly(p_a, m['odds'][2])
+            best = max(k_h, k_d, k_a)
+            if best == k_h: adv = f"主勝 {best:.0%}"
+            elif best == k_d: adv = f"和局 {best:.0%}"
+            else: adv = f"客勝 {best:.0%}"
+        except Exception:
+            adv = "計算錯誤"
     else:
         adv = "無"
     news, _ = fetch_news()
@@ -422,12 +432,18 @@ def render_tab(active):
 )
 def update_cards(n):
     matches, _ = fetch_live_data()
-    cards = [create_match_card(m) for m in matches]
+    cards = []
+    for m in matches:
+        card = create_match_card(m)
+        cards.append(card)
     if matches:
         m = matches[0]
-        lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
-        p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
-        save_prediction(m, (p_h, p_d, p_a), "自動保存")
+        try:
+            lambda_h, lambda_a = compute_lambdas(m['home'], m['away'])
+            p_h, p_d, p_a = compute_probs(lambda_h, lambda_a)
+            save_prediction(m, (p_h, p_d, p_a), "自動保存")
+        except Exception:
+            pass
     return cards
 
 def save_prediction(match, probs, advice):
@@ -442,7 +458,7 @@ def save_prediction(match, probs, advice):
     conn.commit()
     conn.close()
 
-# ---------- 新聞 ----------
+# ---------- 新聞分頁 ----------
 @app.callback(
     Output("news-container", "children"),
     Input("main-tabs", "active_tab")
@@ -535,7 +551,6 @@ def search_team(q):
                         ]), className="mb-2 bg-dark"), width=4)])
         except Exception:
             pass
-    # 模擬後備
     mock_db = [
         {"name": "曼城", "attack": 92, "defense": 88},
         {"name": "阿森納", "attack": 85, "defense": 84},
