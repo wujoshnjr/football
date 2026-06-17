@@ -40,25 +40,14 @@ class SourceFusionService:
                 reliability=0.90,
                 requires_key=True,
                 configured=configured["api_football"],
-                role="Deep live data candidate for fixtures, lineups, events, injuries, standings, odds, and predictions.",
+                role="Deep live data candidate for fixtures, lineups, events, injuries, standings, and predictions.",
                 notes="Use around match day and cache aggressively because free quotas are limited.",
-            ),
-            DataSourceStatus(
-                key="the_odds_api",
-                name="The Odds API v4",
-                category="market_signal_api",
-                priority=4,
-                reliability=0.83,
-                requires_key=True,
-                configured=configured["the_odds_api"],
-                role="Market consensus source for pre-match odds, bookmaker pricing, and line movement features.",
-                notes="Use only as an analysis signal. Keep API key in Render environment variables and cache responses because odds requests consume quota.",
             ),
             DataSourceStatus(
                 key="worldcup_2026_api",
                 name="World Cup 2026 Public API",
                 category="public_endpoint",
-                priority=5,
+                priority=4,
                 reliability=0.58,
                 requires_key=False,
                 configured=configured["worldcup_2026_api"],
@@ -69,7 +58,7 @@ class SourceFusionService:
                 key="statsbomb_open_data",
                 name="StatsBomb Open Data",
                 category="open_data",
-                priority=6,
+                priority=5,
                 reliability=0.80,
                 requires_key=False,
                 configured=True,
@@ -80,7 +69,7 @@ class SourceFusionService:
                 key="openfootball_worldcup_json",
                 name="OpenFootball worldcup.json",
                 category="open_data",
-                priority=7,
+                priority=6,
                 reliability=0.64,
                 requires_key=False,
                 configured=True,
@@ -91,7 +80,7 @@ class SourceFusionService:
                 key="openfootball_worldcup_text",
                 name="OpenFootball worldcup text data",
                 category="open_data",
-                priority=8,
+                priority=7,
                 reliability=0.60,
                 requires_key=False,
                 configured=True,
@@ -102,7 +91,7 @@ class SourceFusionService:
                 key="espn_scoreboard",
                 name="ESPN Scoreboard Endpoint",
                 category="unofficial_public_endpoint",
-                priority=9,
+                priority=8,
                 reliability=0.52,
                 requires_key=False,
                 configured=True,
@@ -113,7 +102,7 @@ class SourceFusionService:
                 key="humhub_fwc_2026",
                 name="HumHub FWC 2026 Service",
                 category="public_endpoint",
-                priority=10,
+                priority=9,
                 reliability=0.50,
                 requires_key=False,
                 configured=configured["humhub_fwc_2026"],
@@ -124,7 +113,7 @@ class SourceFusionService:
                 key="soccerdata_package",
                 name="soccerdata Python package",
                 category="scraper",
-                priority=11,
+                priority=10,
                 reliability=0.46,
                 requires_key=False,
                 configured=True,
@@ -135,7 +124,7 @@ class SourceFusionService:
                 key="github_football_scrapers",
                 name="GitHub football scraper projects",
                 category="scraper",
-                priority=12,
+                priority=11,
                 reliability=0.40,
                 requires_key=False,
                 configured=True,
@@ -166,7 +155,7 @@ class SourceFusionService:
         weighted = sum(source.reliability / max(source.priority, 1) for source in live_sources)
         max_weighted = sum(1 / max(source.priority, 1) for source in live_sources)
         reliability_score = round(min(weighted / max_weighted, 1.0), 3) if max_weighted else 0.0
-        consensus_score = round(min(len(live_sources) / 7, 1.0), 3)
+        consensus_score = round(min(len(live_sources) / 6, 1.0), 3)
 
         return SourceFeatureBundle(
             sources_used=[source.key for source in live_sources],
@@ -174,7 +163,7 @@ class SourceFusionService:
             sources_missing=missing_sources,
             reliability_score=reliability_score,
             fixture_consensus_score=consensus_score,
-            model_adjustment_note="Source registry is active. Current model confidence is adjusted by source reliability and source coverage; next phase should persist actual fixture, form, odds, and xG features into a feature table.",
+            model_adjustment_note="Source registry is active. Current model confidence is adjusted by source reliability and source coverage; next phase should persist actual fixture, form, market, and xG features into a feature table.",
         )
 
     def _configured_flags(self) -> dict[str, bool]:
@@ -182,7 +171,6 @@ class SourceFusionService:
             "zafronix_worldcup": bool(getattr(self.settings, "zafronix_worldcup_key", None) and getattr(self.settings, "zafronix_worldcup_base_url", None)),
             "football_data": bool(getattr(self.settings, "football_data_token", None)),
             "api_football": bool(getattr(self.settings, "api_football_key", None)),
-            "the_odds_api": bool(getattr(self.settings, "the_odds_api_key", None)),
             "worldcup_2026_api": bool(getattr(self.settings, "worldcup_2026_public_base_url", None)),
             "humhub_fwc_2026": bool(getattr(self.settings, "humhub_fwc_2026_base_url", None)),
         }
