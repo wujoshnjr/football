@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
+from app.services.odds_api_client import OddsApiClient, OddsApiError
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 
@@ -129,6 +130,14 @@ def match_feature_rows():
     return build_match_feature_table(demo_fixtures(), source_context())
 
 
+def odds_client() -> OddsApiClient:
+    return OddsApiClient(settings)
+
+
+def odds_error_response(exc: OddsApiError) -> HTTPException:
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
@@ -152,6 +161,30 @@ def model_features():
 @app.get("/model/feature-table")
 def model_feature_table():
     return match_feature_rows()
+
+
+@app.get("/odds/sports")
+def odds_sports(include_all: bool = Query(default=False, description="Return all sports when true; default returns in-season sports.")):
+    try:
+        return odds_client().sports(include_all=include_all)
+    except OddsApiError as exc:
+        raise odds_error_response(exc) from exc
+
+
+@app.get("/odds/upcoming")
+def odds_upcoming(sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming.")):
+    try:
+        return odds_client().odds(sport_key=sport_key)
+    except OddsApiError as exc:
+        raise odds_error_response(exc) from exc
+
+
+@app.get("/odds/market-consensus")
+def odds_market_consensus(sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming.")):
+    try:
+        return odds_client().market_consensus(sport_key=sport_key)
+    except OddsApiError as exc:
+        raise odds_error_response(exc) from exc
 
 
 @app.get("/fixtures", response_model=list[Fixture])
