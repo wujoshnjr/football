@@ -1,3 +1,7 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+
 type TeamSnapshot = {
   id: string;
   name: string;
@@ -71,6 +75,7 @@ type FetchResult<T> = {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 const fixtureSource = 'auto';
 const finalStates = ['finished', 'final', 'full_time'];
+const requestTimeoutMs = 5500;
 
 function isFinal(fixture: Fixture) {
   return finalStates.includes(fixture.status.toLowerCase());
@@ -87,19 +92,26 @@ function displayTime(value: string) {
   return parsed.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 }
 
-async function getJson<T>(path: string, fallback: T): Promise<FetchResult<T>> {
+async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutMs): Promise<FetchResult<T>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, { cache: 'no-store' });
+    const response = await fetch(`${API_BASE_URL}${path}`, { cache: 'no-store', signal: controller.signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     return { data: await response.json(), ok: true };
   } catch (error) {
-    return { data: fallback, ok: false, error: error instanceof Error ? error.message : 'unknown error' };
+    const message = error instanceof Error && error.name === 'AbortError'
+      ? `timeout after ${timeoutMs}ms`
+      : error instanceof Error ? error.message : 'unknown error';
+    return { data: fallback, ok: false, error: message };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 async function getForecast(fixture: Fixture): Promise<Forecast | null> {
   if (isFinal(fixture)) return null;
-  const result = await getJson<Forecast | null>(`/predictions/${fixture.id}?source=${fixtureSource}`, null);
+  const result = await getJson<Forecast | null>(`/predictions/${fixture.id}?source=${fixtureSource}`, null, 4500);
   return result.data;
 }
 
@@ -137,7 +149,7 @@ function percent(value?: number | null) {
   return `${Math.round(value * 100)}%`;
 }
 
-function MatchCard({ fixture, forecast, feature }: { fixture: Fixture; forecast: Forecast | null; feature?: FeatureRow }) {
+function MatchCard({ fixture, forecast, feature, showPrediction = false }: { fixture: Fixture; forecast: Forecast | null; feature?: FeatureRow; showPrediction?: boolean }) {
   const done = isFinal(fixture);
 
   return (
@@ -176,8 +188,16 @@ function MatchCard({ fixture, forecast, feature }: { fixture: Fixture; forecast:
           <ul className="reasons">{forecast.explanation.slice(0, 4).map((item) => <li key={item}>{item}</li>)}</ul>
           <p className="version">Model: {forecast.model_version}</p>
         </>
+      ) : showPrediction ? (
+        <p className="warning">預測暫時不可用，頁面已先載入賽程，避免因後端冷啟動卡住整個網站。</p>
       ) : (
-        <p className="warning">預測暫時不可用，請檢查後端、fixture source 或資料源狀態。</p>
+        <>
+          <div className="metrics">
+            <div><span>資料狀態</span><strong>賽程已載入</strong></div>
+            <div><span>AI 分析</span><strong>熱門區顯示</strong></div>
+          </div>
+          {feature?.market_signal_available ? <MarketSignal row={feature} /> : null}
+        </>
       )}
     </article>
   );
@@ -200,10 +220,11 @@ export default async function HomePage() {
   const ingestion = ingestionResult.data;
   const featureRows = featureResult.data;
   const featureByFixture = new Map(featureRows.map((row) => [row.fixture_id, row]));
-  const forecasts = await Promise.all(fixtures.map((fixture) => getForecast(fixture)));
   const finalCount = fixtures.filter(isFinal).length;
   const upcoming = fixtures.filter((fixture) => !isFinal(fixture));
   const featured = upcoming.slice(0, 2);
+  const forecastPairs = await Promise.all(featured.map(async (fixture) => [fixture.id, await getForecast(fixture)] as const));
+  const forecastByFixture = new Map(forecastPairs);
   const topTeams = Array.from(new Map(fixtures.flatMap((fixture) => [fixture.home_team, fixture.away_team]).map((team) => [team.id, team])).values()).sort((a, b) => b.elo_rating - a.elo_rating).slice(0, 5);
   const backendHealthy = fixtureResult.ok && sourceResult.ok;
   const ingestionHealthy = Boolean(ingestion && ingestion.fixture_count > 0);
@@ -261,21 +282,21 @@ export default async function HomePage() {
       {fixtures.length === 0 ? (
         <section className="emptyState">
           <h2>目前沒有賽程資料</h2>
-          <p>優先檢查 Render 後端是否部署成功、`NEXT_PUBLIC_API_BASE_URL` 是否指向 Render，以及 `/ingestion/fixtures` 是否有資料。</p>
+          <p>優先檢查 Render 後端是否部署成功、NEXT_PUBLIC_API_BASE_URL 是否指向 Render，以及 /ingestion/fixtures 是否有資料。</p>
         </section>
       ) : null}
 
       <section className="section" id="ai">
-        <div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>只顯示未開賽賽事</span></div>
+        <div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>只抓前 2 場，避免建置與冷啟動卡住首頁</span></div>
         <div className="spotlight">
-          {featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[fixtures.indexOf(fixture)]} feature={featureByFixture.get(fixture.id)} />)}
+          {featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} feature={featureByFixture.get(fixture.id)} showPrediction />)}
         </div>
       </section>
 
       <section className="section" id="schedule">
         <div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>source={fixtureSource}，所有時間以台灣時間顯示</span></div>
         <section className="grid">
-          {fixtures.map((fixture, index) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[index]} feature={featureByFixture.get(fixture.id)} />)}
+          {fixtures.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} feature={featureByFixture.get(fixture.id)} />)}
         </section>
       </section>
 
@@ -299,9 +320,9 @@ export default async function HomePage() {
       </section>
 
       <section className="articleStrip">
-        <article><p>問題修正</p><h3>新增後端錯誤顯示、ingestion 狀態、market signal 狀態，不再只顯示空白。</h3></article>
+        <article><p>效能修正</p><h3>首頁改成動態渲染並加入請求 timeout，避免 Vercel 建置時被 Render 冷啟動拖到 60 秒。</h3></article>
         <article><p>資料策略</p><h3>source=auto 優先使用 ingestion，失敗才退回 demo。</h3></article>
-        <article><p>下一步</p><h3>將 odds 匹配成功率與真實 fixture source 顯示成正式資料品質儀表板。</h3></article>
+        <article><p>下一步</p><h3>將模型 diagnostics 顯示成正式 AI 解釋面板。</h3></article>
       </section>
 
       <footer className="footer">World Cup IQ — AI predictions are informational analysis only.</footer>
