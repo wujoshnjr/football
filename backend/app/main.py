@@ -149,6 +149,13 @@ def odds_error_response(exc: OddsApiError) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
 
 
+def parse_sport_keys(sport_keys: str | None) -> list[str] | None:
+    if not sport_keys:
+        return None
+    parsed = [item.strip() for item in sport_keys.split(",") if item.strip()]
+    return parsed or None
+
+
 def fixture_ingestion():
     return FixtureIngestionService(settings).ingest()
 
@@ -254,6 +261,20 @@ def odds_sports(include_all: bool = Query(default=False, description="Return all
 def odds_upcoming(sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming.")):
     try:
         return odds_client().odds(sport_key=sport_key)
+    except OddsApiError as exc:
+        raise odds_error_response(exc) from exc
+
+
+@app.get("/odds/tomorrow")
+def odds_tomorrow(
+    sport_keys: str | None = Query(default=None, description="Comma-separated The Odds API soccer sport keys. Defaults to common active soccer leagues."),
+    timezone_name: str = Query(default="Asia/Taipei", description="Local timezone used to define tomorrow's date window."),
+):
+    try:
+        return odds_client().tomorrow_market_consensus(
+            sport_keys=parse_sport_keys(sport_keys),
+            timezone_name=timezone_name,
+        )
     except OddsApiError as exc:
         raise odds_error_response(exc) from exc
 
