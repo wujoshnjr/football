@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import exp, factorial
+from typing import Any
 
 from app.schemas import (
     ExpectedGoals,
     Fixture,
+    PredictionDiagnostics,
     PredictionResponse,
     Probabilities,
+    ProbabilityComponent,
     ScorelineProbability,
     SourceFeatureBundle,
     TeamSnapshot,
@@ -16,8 +19,9 @@ from app.schemas import (
 
 @dataclass(frozen=True)
 class ModelWeights:
-    elo: float = 0.45
-    poisson: float = 0.55
+    elo: float = 0.32
+    poisson: float = 0.48
+    market: float = 0.20
 
 
 class PredictionService:
@@ -25,15 +29,23 @@ class PredictionService:
         self.model_version = model_version
         self.weights = weights or ModelWeights()
 
-    def predict_fixture(self, fixture: Fixture, source_context: SourceFeatureBundle | None = None) -> PredictionResponse:
+    def predict_fixture(
+        self,
+        fixture: Fixture,
+        source_context: SourceFeatureBundle | None = None,
+        market_signal: dict[str, Any] | None = None,
+    ) -> PredictionResponse:
         elo_probs = self._elo_probabilities(fixture.home_team, fixture.away_team)
         expected_goals = self._expected_goals(fixture.home_team, fixture.away_team)
         poisson_probs, scorelines = self._poisson_probabilities(expected_goals.home, expected_goals.away)
+        market_probs = self._market_probabilities(market_signal)
 
-        mixed = self._mix_probabilities(elo_probs, poisson_probs)
+        components = self._components(elo_probs, poisson_probs, market_probs, market_signal)
+        mixed = self._mix_components(components)
         mixed = self._apply_source_context(mixed, source_context)
-        confidence = self._confidence(mixed, source_context)
-        explanation = self._explain(fixture, expected_goals, mixed, source_context)
+        diagnostics = self._diagnostics(components, mixed, source_context, market_signal)
+        confidence = self._confidence(mixed, source_context, diagnostics)
+        explanation = self._explain(fixture, expected_goals, mixed, source_context, diagnostics)
 
         return PredictionResponse(
             fixture_id=fixture.id,
@@ -46,6 +58,7 @@ class PredictionService:
             model_version=self.model_version,
             explanation=explanation,
             source_context=source_context,
+            diagnostics=diagnostics,
         )
 
     def _elo_probabilities(self, home: TeamSnapshot, away: TeamSnapshot) -> Probabilities:
@@ -104,14 +117,47 @@ class PredictionService:
     def _poisson(self, goals: int, rate: float) -> float:
         return exp(-rate) * rate**goals / factorial(goals)
 
-    def _mix_probabilities(self, elo: Probabilities, poisson: Probabilities) -> Probabilities:
-        return self._normalize(
-            Probabilities(
-                home_win=(elo.home_win * self.weights.elo) + (poisson.home_win * self.weights.poisson),
-                draw=(elo.draw * self.weights.elo) + (poisson.draw * self.weights.poisson),
-                away_win=(elo.away_win * self.weights.elo) + (poisson.away_win * self.weights.poisson),
+    def _market_probabilities(self, market_signal: dict[str, Any] | None) -> Probabilities | None:
+        if not market_signal or not market_signal.get("market_signal_available"):
+            return None
+        home = market_signal.get("market_home_implied_probability")
+        draw = market_signal.get("market_draw_implied_probability")
+        away = market_signal.get("market_away_implied_probability")
+        if not all(isinstance(value, (int, float)) for value in [home, draw, away]):
+            return None
+        return self._normalize(Probabilities(home_win=float(home), draw=float(draw), away_win=float(away)))
+
+    def _components(
+        self,
+        elo: Probabilities,
+        poisson: Probabilities,
+        market: Probabilities | None,
+        market_signal: dict[str, Any] | None,
+    ) -> list[ProbabilityComponent]:
+        components = [
+            ProbabilityComponent(name="elo_rating", weight=self.weights.elo, probabilities=elo, notes="Team strength baseline."),
+            ProbabilityComponent(name="poisson_goals", weight=self.weights.poisson, probabilities=poisson, notes="Goal-rate baseline from attack, defense, form, and rating."),
+        ]
+        if market is not None:
+            components.append(
+                ProbabilityComponent(
+                    name="market_consensus",
+                    weight=self.weights.market,
+                    probabilities=market,
+                    notes=f"The Odds API h2h consensus from {market_signal.get('market_bookmaker_count', 0)} bookmaker prices.",
+                )
             )
-        )
+        return components
+
+    def _mix_components(self, components: list[ProbabilityComponent]) -> Probabilities:
+        active = [component for component in components if component.active and component.weight > 0]
+        total_weight = sum(component.weight for component in active)
+        if total_weight <= 0:
+            return Probabilities(home_win=0.3333, draw=0.3333, away_win=0.3334)
+        home = sum(component.probabilities.home_win * component.weight for component in active) / total_weight
+        draw = sum(component.probabilities.draw * component.weight for component in active) / total_weight
+        away = sum(component.probabilities.away_win * component.weight for component in active) / total_weight
+        return self._normalize(Probabilities(home_win=home, draw=draw, away_win=away))
 
     def _apply_source_context(self, probs: Probabilities, source_context: SourceFeatureBundle | None) -> Probabilities:
         if source_context is None or source_context.reliability_score <= 0:
@@ -126,7 +172,7 @@ class PredictionService:
             [("home", probs.home_win), ("draw", probs.draw), ("away", probs.away_win)],
             key=lambda item: item[1],
         )
-        nudge = min(0.035, reliability * consensus * 0.04)
+        nudge = min(0.025, reliability * consensus * 0.03)
         adjusted = {
             "home": probs.home_win,
             "draw": probs.draw,
@@ -154,14 +200,48 @@ class PredictionService:
             away_win=round(probs.away_win / total, 4),
         )
 
-    def _confidence(self, probs: Probabilities, source_context: SourceFeatureBundle | None = None) -> str:
+    def _diagnostics(
+        self,
+        components: list[ProbabilityComponent],
+        probs: Probabilities,
+        source_context: SourceFeatureBundle | None,
+        market_signal: dict[str, Any] | None,
+    ) -> PredictionDiagnostics:
+        risk_flags: list[str] = []
+        reason_codes: list[str] = []
+        top = max(probs.home_win, probs.draw, probs.away_win)
+        second = sorted([probs.home_win, probs.draw, probs.away_win], reverse=True)[1]
+        if top - second < 0.08:
+            risk_flags.append("low_margin_between_top_outcomes")
+        if source_context and source_context.reliability_score < 0.45:
+            risk_flags.append("low_source_reliability")
+        if not market_signal or not market_signal.get("market_signal_available"):
+            risk_flags.append("market_signal_missing")
+        if any(component.name == "market_consensus" for component in components):
+            reason_codes.append("market_consensus_blended")
+        reason_codes.extend(["elo_rating_baseline", "poisson_goal_model", "source_reliability_adjustment"])
+        return PredictionDiagnostics(
+            components=components,
+            market_signal_used=any(component.name == "market_consensus" for component in components),
+            calibration_status="needs_backtest_calibration",
+            risk_flags=risk_flags,
+            reason_codes=reason_codes,
+        )
+
+    def _confidence(
+        self,
+        probs: Probabilities,
+        source_context: SourceFeatureBundle | None = None,
+        diagnostics: PredictionDiagnostics | None = None,
+    ) -> str:
         top = max(probs.home_win, probs.draw, probs.away_win)
         second = sorted([probs.home_win, probs.draw, probs.away_win], reverse=True)[1]
         margin = top - second
         reliability = source_context.reliability_score if source_context else 0.0
-        if top >= 0.62 and margin >= 0.18 and reliability >= 0.45:
+        risk_count = len(diagnostics.risk_flags) if diagnostics else 0
+        if top >= 0.62 and margin >= 0.18 and reliability >= 0.45 and risk_count <= 1:
             return "high"
-        if top >= 0.48 and margin >= 0.10:
+        if top >= 0.48 and margin >= 0.10 and risk_count <= 2:
             return "medium"
         return "low"
 
@@ -171,6 +251,7 @@ class PredictionService:
         expected_goals: ExpectedGoals,
         probs: Probabilities,
         source_context: SourceFeatureBundle | None = None,
+        diagnostics: PredictionDiagnostics | None = None,
     ) -> list[str]:
         home = fixture.home_team
         away = fixture.away_team
@@ -196,9 +277,14 @@ class PredictionService:
             )
             notes.append(source_context.model_adjustment_note)
 
+        if diagnostics and diagnostics.market_signal_used:
+            notes.append("The Odds API 市場共識已納入模型混合，但只作為分析訊號，不作下注執行。")
+        elif diagnostics:
+            notes.append("市場共識尚未匹配，本次預測以 Elo、Poisson 與資料源可靠度為主。")
+
         top_label = max(
             [("主勝", probs.home_win), ("和局", probs.draw), ("客勝", probs.away_win)],
             key=lambda item: item[1],
         )[0]
-        notes.append(f"綜合 Elo、Poisson 與資料源可靠度後，目前最高機率結果為：{top_label}。")
+        notes.append(f"綜合 Elo、Poisson、資料源可靠度與可用市場訊號後，目前最高機率結果為：{top_label}。")
         return notes
