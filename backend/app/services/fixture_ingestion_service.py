@@ -9,6 +9,8 @@ from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.services.football_data_client import FootballDataClient
+
 
 @dataclass(frozen=True)
 class SourceAdapterResult:
@@ -28,6 +30,7 @@ class FixtureIngestionService:
 
     def ingest(self) -> dict[str, Any]:
         results = [
+            self.football_data_worldcup(),
             self.openfootball_worldcup_json(),
             self.espn_scoreboard(),
         ]
@@ -39,6 +42,18 @@ class FixtureIngestionService:
             "fixtures": fixtures,
             "usage_note": "Ingested fixtures are normalized snapshots. They should be cross-checked before replacing demo fixtures as the default site source.",
         }
+
+    def football_data_worldcup(self) -> SourceAdapterResult:
+        result = FootballDataClient(self.settings, timeout_seconds=self.timeout_seconds).worldcup_matches()
+        return SourceAdapterResult(
+            source_key=result.source_key,
+            configured=result.configured,
+            ok=result.ok,
+            status_code=result.status_code,
+            error=result.error,
+            record_count=result.record_count,
+            records=result.records,
+        )
 
     def openfootball_worldcup_json(self) -> SourceAdapterResult:
         url = getattr(self.settings, "openfootball_worldcup_json_url", None)
@@ -176,7 +191,7 @@ def dedupe_fixtures(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def source_priority(source_key: Any) -> int:
-    priorities = {"espn_scoreboard": 1, "openfootball_worldcup_json": 2}
+    priorities = {"football_data": 0, "espn_scoreboard": 1, "openfootball_worldcup_json": 2}
     return priorities.get(str(source_key), 99)
 
 
@@ -232,9 +247,7 @@ def first_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def find_espn_competitor(competitors: Any, home_away: str) -> dict[str, Any] | None:
-    if not isinstance(competitors, list):
-        return None
+def find_espn_competitor(competitors: list[Any], home_away: str) -> dict[str, Any] | None:
     for competitor in competitors:
         if isinstance(competitor, dict) and competitor.get("homeAway") == home_away:
             return competitor
@@ -244,21 +257,24 @@ def find_espn_competitor(competitors: Any, home_away: str) -> dict[str, Any] | N
 def valid_team_pair(home: str | None, away: str | None) -> bool:
     if not home or not away:
         return False
-    return normalize_name(home) != normalize_name(away)
+    if normalize_name(home) == normalize_name(away):
+        return False
+    return True
 
 
 def safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
     try:
-        if value is None or value == "":
-            return None
         return int(value)
     except (TypeError, ValueError):
         return None
 
 
+def normalize_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return normalized or "unknown"
+
+
 def stable_id(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
-
-
-def normalize_name(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", name.lower())
