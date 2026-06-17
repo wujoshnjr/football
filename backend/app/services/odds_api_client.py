@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 
 class OddsApiError(RuntimeError):
@@ -27,6 +29,17 @@ class OddsApiResult:
     count: int
     quota: dict[str, str | None]
     data: list[dict[str, Any]]
+
+
+DEFAULT_SOCCER_SPORT_KEYS = [
+    "soccer_usa_mls",
+    "soccer_japan_j_league",
+    "soccer_sweden_allsvenskan",
+    "soccer_sweden_superettan",
+    "soccer_norway_eliteserien",
+    "soccer_finland_veikkausliiga",
+    "soccer_brazil_campeonato",
+]
 
 
 class OddsApiClient:
@@ -53,7 +66,12 @@ class OddsApiClient:
             data=data if isinstance(data, list) else [],
         )
 
-    def odds(self, sport_key: str | None = None) -> OddsApiResult:
+    def odds(
+        self,
+        sport_key: str | None = None,
+        commence_time_from: str | None = None,
+        commence_time_to: str | None = None,
+    ) -> OddsApiResult:
         selected_sport = sport_key or getattr(self.settings, "the_odds_api_sport_key", "upcoming")
         params = {
             "apiKey": self._api_key(),
@@ -62,6 +80,11 @@ class OddsApiClient:
             "oddsFormat": getattr(self.settings, "the_odds_api_odds_format", "decimal"),
             "dateFormat": "iso",
         }
+        if selected_sport != "upcoming":
+            if commence_time_from:
+                params["commenceTimeFrom"] = commence_time_from
+            if commence_time_to:
+                params["commenceTimeTo"] = commence_time_to
         url = self._url(f"/sports/{selected_sport}/odds", params)
         data, quota = self._get_json(url)
         return OddsApiResult(
@@ -73,10 +96,72 @@ class OddsApiClient:
             data=data if isinstance(data, list) else [],
         )
 
-    def market_consensus(self, sport_key: str | None = None) -> dict[str, Any]:
-        result = self.odds(sport_key=sport_key)
+    def market_consensus(
+        self,
+        sport_key: str | None = None,
+        commence_time_from: str | None = None,
+        commence_time_to: str | None = None,
+    ) -> dict[str, Any]:
+        result = self.odds(
+            sport_key=sport_key,
+            commence_time_from=commence_time_from,
+            commence_time_to=commence_time_to,
+        )
+        summaries = self._summaries_from_odds(result.data)
+        return {
+            "configured": result.configured,
+            "sport_key": result.sport_key,
+            "event_count": result.count,
+            "quota": result.quota,
+            "market_consensus": summaries,
+            "usage_note": "Odds are used only as a market-consensus analysis signal. No betting execution is supported.",
+        }
+
+    def tomorrow_market_consensus(
+        self,
+        sport_keys: list[str] | None = None,
+        timezone_name: str = "Asia/Taipei",
+    ) -> dict[str, Any]:
+        window = tomorrow_window(timezone_name)
+        selected_sports = sport_keys or DEFAULT_SOCCER_SPORT_KEYS
+        all_events: list[dict[str, Any]] = []
+        source_results: list[dict[str, Any]] = []
+        quota_snapshots: list[dict[str, str | None]] = []
+
+        for sport_key in selected_sports:
+            result = self.odds(
+                sport_key=sport_key,
+                commence_time_from=window["commence_time_from"],
+                commence_time_to=window["commence_time_to"],
+            )
+            quota_snapshots.append(result.quota)
+            source_results.append({
+                "sport_key": sport_key,
+                "event_count": result.count,
+                "quota": result.quota,
+            })
+            all_events.extend(result.data)
+
+        summaries = self._summaries_from_odds(all_events)
+        summaries.sort(key=lambda item: item.get("commence_time") or "")
+        return {
+            "configured": True,
+            "timezone": timezone_name,
+            "local_date": window["local_date"],
+            "commence_time_from": window["commence_time_from"],
+            "commence_time_to": window["commence_time_to"],
+            "sport_keys": selected_sports,
+            "sport_count": len(selected_sports),
+            "event_count": len(summaries),
+            "quota": latest_quota(quota_snapshots),
+            "sources": source_results,
+            "market_consensus": summaries,
+            "usage_note": "Tomorrow odds use league-specific soccer sport keys with a Taiwan-local tomorrow UTC time window. Odds are analysis signals only; no betting execution is supported.",
+        }
+
+    def _summaries_from_odds(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         summaries = []
-        for event in result.data:
+        for event in events:
             h2h_prices: dict[str, list[float]] = {}
             for bookmaker in event.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
@@ -104,18 +189,11 @@ class OddsApiClient:
                 "commence_time": event.get("commence_time"),
                 "home_team": event.get("home_team"),
                 "away_team": event.get("away_team"),
+                "bookmaker_count": len(event.get("bookmakers", [])),
                 "market": "h2h",
                 "consensus": consensus,
             })
-
-        return {
-            "configured": result.configured,
-            "sport_key": result.sport_key,
-            "event_count": result.count,
-            "quota": result.quota,
-            "market_consensus": summaries,
-            "usage_note": "Odds are used only as a market-consensus analysis signal. No betting execution is supported.",
-        }
+        return summaries
 
     def _api_key(self) -> str:
         api_key = getattr(self.settings, "the_odds_api_key", None)
@@ -146,3 +224,27 @@ class OddsApiClient:
             raise OddsApiError(f"The Odds API network error: {exc.reason}") from exc
         except TimeoutError as exc:
             raise OddsApiError("The Odds API request timed out") from exc
+
+
+def tomorrow_window(timezone_name: str = "Asia/Taipei") -> dict[str, str]:
+    local_tz = ZoneInfo(timezone_name)
+    local_now = datetime.now(local_tz)
+    local_tomorrow = local_now.date() + timedelta(days=1)
+    start_local = datetime.combine(local_tomorrow, datetime.min.time(), tzinfo=local_tz)
+    end_local = start_local + timedelta(days=1) - timedelta(seconds=1)
+    return {
+        "local_date": local_tomorrow.isoformat(),
+        "commence_time_from": to_utc_z(start_local),
+        "commence_time_to": to_utc_z(end_local),
+    }
+
+
+def to_utc_z(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def latest_quota(items: list[dict[str, str | None]]) -> dict[str, str | None]:
+    for item in reversed(items):
+        if item:
+            return item
+    return {"requests_remaining": None, "requests_used": None, "requests_last": None}
