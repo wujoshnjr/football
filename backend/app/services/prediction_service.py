@@ -9,6 +9,7 @@ from app.schemas import (
     PredictionResponse,
     Probabilities,
     ScorelineProbability,
+    SourceFeatureBundle,
     TeamSnapshot,
 )
 
@@ -24,14 +25,15 @@ class PredictionService:
         self.model_version = model_version
         self.weights = weights or ModelWeights()
 
-    def predict_fixture(self, fixture: Fixture) -> PredictionResponse:
+    def predict_fixture(self, fixture: Fixture, source_context: SourceFeatureBundle | None = None) -> PredictionResponse:
         elo_probs = self._elo_probabilities(fixture.home_team, fixture.away_team)
         expected_goals = self._expected_goals(fixture.home_team, fixture.away_team)
         poisson_probs, scorelines = self._poisson_probabilities(expected_goals.home, expected_goals.away)
 
         mixed = self._mix_probabilities(elo_probs, poisson_probs)
-        confidence = self._confidence(mixed)
-        explanation = self._explain(fixture, expected_goals, mixed)
+        mixed = self._apply_source_context(mixed, source_context)
+        confidence = self._confidence(mixed, source_context)
+        explanation = self._explain(fixture, expected_goals, mixed, source_context)
 
         return PredictionResponse(
             fixture_id=fixture.id,
@@ -43,6 +45,7 @@ class PredictionService:
             confidence=confidence,
             model_version=self.model_version,
             explanation=explanation,
+            source_context=source_context,
         )
 
     def _elo_probabilities(self, home: TeamSnapshot, away: TeamSnapshot) -> Probabilities:
@@ -110,6 +113,37 @@ class PredictionService:
             )
         )
 
+    def _apply_source_context(self, probs: Probabilities, source_context: SourceFeatureBundle | None) -> Probabilities:
+        if source_context is None or source_context.reliability_score <= 0:
+            return probs
+
+        reliability = source_context.reliability_score
+        consensus = source_context.fixture_consensus_score
+        if consensus <= 0:
+            return probs
+
+        top_label, _ = max(
+            [("home", probs.home_win), ("draw", probs.draw), ("away", probs.away_win)],
+            key=lambda item: item[1],
+        )
+        nudge = min(0.035, reliability * consensus * 0.04)
+        adjusted = {
+            "home": probs.home_win,
+            "draw": probs.draw,
+            "away": probs.away_win,
+        }
+        adjusted[top_label] += nudge
+        for key in adjusted:
+            if key != top_label:
+                adjusted[key] = max(0.01, adjusted[key] - nudge / 2)
+        return self._normalize(
+            Probabilities(
+                home_win=adjusted["home"],
+                draw=adjusted["draw"],
+                away_win=adjusted["away"],
+            )
+        )
+
     def _normalize(self, probs: Probabilities) -> Probabilities:
         total = probs.home_win + probs.draw + probs.away_win
         if total <= 0:
@@ -120,17 +154,24 @@ class PredictionService:
             away_win=round(probs.away_win / total, 4),
         )
 
-    def _confidence(self, probs: Probabilities) -> str:
+    def _confidence(self, probs: Probabilities, source_context: SourceFeatureBundle | None = None) -> str:
         top = max(probs.home_win, probs.draw, probs.away_win)
         second = sorted([probs.home_win, probs.draw, probs.away_win], reverse=True)[1]
         margin = top - second
-        if top >= 0.62 and margin >= 0.18:
+        reliability = source_context.reliability_score if source_context else 0.0
+        if top >= 0.62 and margin >= 0.18 and reliability >= 0.45:
             return "high"
         if top >= 0.48 and margin >= 0.10:
             return "medium"
         return "low"
 
-    def _explain(self, fixture: Fixture, expected_goals: ExpectedGoals, probs: Probabilities) -> list[str]:
+    def _explain(
+        self,
+        fixture: Fixture,
+        expected_goals: ExpectedGoals,
+        probs: Probabilities,
+        source_context: SourceFeatureBundle | None = None,
+    ) -> list[str]:
         home = fixture.home_team
         away = fixture.away_team
         notes: list[str] = []
@@ -149,9 +190,15 @@ class PredictionService:
 
         notes.append(f"Poisson 模型預估進球：{home.name} {expected_goals.home}，{away.name} {expected_goals.away}。")
 
+        if source_context:
+            notes.append(
+                f"資料源融合：已配置 {len(source_context.sources_configured)} 個來源，實際使用 {len(source_context.sources_used)} 個來源，可靠度 {source_context.reliability_score:.2f}。"
+            )
+            notes.append(source_context.model_adjustment_note)
+
         top_label = max(
             [("主勝", probs.home_win), ("和局", probs.draw), ("客勝", probs.away_win)],
             key=lambda item: item[1],
         )[0]
-        notes.append(f"綜合 Elo 與 Poisson 後，目前最高機率結果為：{top_label}。")
+        notes.append(f"綜合 Elo、Poisson 與資料源可靠度後，目前最高機率結果為：{top_label}。")
         return notes
