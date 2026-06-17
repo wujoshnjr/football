@@ -36,6 +36,21 @@ def test_feature_table_contains_core_model_features() -> None:
     assert required_columns.issubset(row.keys())
 
 
+def test_feature_table_contains_market_signal_columns() -> None:
+    row = match_feature_rows()[0]
+    required_columns = {
+        "market_signal_available",
+        "market_source_event_id",
+        "market_source_sport_key",
+        "market_home_implied_probability",
+        "market_draw_implied_probability",
+        "market_away_implied_probability",
+        "market_bookmaker_count",
+        "market_signal_note",
+    }
+    assert required_columns.issubset(row.keys())
+
+
 def test_feature_table_does_not_expose_score_inputs_for_model_features() -> None:
     rows = match_feature_rows()
     for row in rows:
