@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
     worldcup_2026_public_base_url: str | None = None
     humhub_fwc_2026_base_url: str | None = None
+    openfootball_worldcup_json_url: str = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+    statsbomb_open_data_base_url: str = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
+    espn_scoreboard_url: str = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+    soccerdata_project_url: str = "https://github.com/probberechts/soccerdata"
 
     database_url: str | None = None
     redis_url: str | None = None
