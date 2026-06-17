@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.advanced_feature_registry import advanced_feature_registry
+from app.services.feature_table_service import build_match_feature_table
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 
@@ -124,6 +125,10 @@ def source_context():
     return SourceFusionService(settings).build_source_context()
 
 
+def match_feature_rows():
+    return build_match_feature_table(demo_fixtures(), source_context())
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
@@ -142,6 +147,11 @@ def data_source_context():
 @app.get("/model/features")
 def model_features():
     return advanced_feature_registry()
+
+
+@app.get("/model/feature-table")
+def model_feature_table():
+    return match_feature_rows()
 
 
 @app.get("/fixtures", response_model=list[Fixture])
