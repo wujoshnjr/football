@@ -40,6 +40,28 @@ class ScorelineProbability(BaseModel):
     probability: float
 
 
+class DataSourceStatus(BaseModel):
+    key: str
+    name: str
+    category: str
+    priority: int
+    reliability: float = Field(ge=0, le=1)
+    requires_key: bool
+    configured: bool = False
+    enabled: bool = True
+    role: str
+    notes: str
+
+
+class SourceFeatureBundle(BaseModel):
+    sources_used: list[str] = []
+    sources_configured: list[str] = []
+    sources_missing: list[str] = []
+    reliability_score: float = Field(default=0.0, ge=0, le=1)
+    fixture_consensus_score: float = Field(default=0.0, ge=0, le=1)
+    model_adjustment_note: str = "No external source features applied yet."
+
+
 class PredictionResponse(BaseModel):
     fixture_id: str
     match: str
@@ -50,6 +72,7 @@ class PredictionResponse(BaseModel):
     confidence: str
     model_version: str
     explanation: list[str]
+    source_context: SourceFeatureBundle | None = None
 
 
 class ManualPredictionInput(BaseModel):
@@ -57,6 +80,7 @@ class ManualPredictionInput(BaseModel):
     home_team: TeamSnapshot
     away_team: TeamSnapshot
     kickoff_time: str = "TBD"
+    source_context: SourceFeatureBundle | None = None
 
 
 class ModelPerformance(BaseModel):
