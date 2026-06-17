@@ -2,8 +2,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.schemas import Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
+from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.prediction_service import PredictionService
+from app.services.source_fusion_service import SourceFusionService
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.model_version)
@@ -78,9 +79,23 @@ def demo_fixtures() -> list[Fixture]:
     ]
 
 
+def source_context():
+    return SourceFusionService(settings).build_source_context()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
+
+
+@app.get("/data-sources", response_model=list[DataSourceStatus])
+def data_sources() -> list[DataSourceStatus]:
+    return SourceFusionService(settings).registry()
+
+
+@app.get("/data-sources/context")
+def data_source_context():
+    return source_context()
 
 
 @app.get("/fixtures", response_model=list[Fixture])
@@ -99,7 +114,7 @@ def get_fixture(fixture_id: str) -> Fixture:
 @app.get("/predictions/{fixture_id}")
 def get_prediction(fixture_id: str):
     service = PredictionService(model_version=settings.model_version)
-    return service.predict_fixture(get_fixture(fixture_id))
+    return service.predict_fixture(get_fixture(fixture_id), source_context=source_context())
 
 
 @app.post("/predictions/manual")
@@ -111,7 +126,7 @@ def manual_prediction(payload: ManualPredictionInput):
         away_team=payload.away_team,
         kickoff_time=payload.kickoff_time,
     )
-    return service.predict_fixture(fixture)
+    return service.predict_fixture(fixture, source_context=payload.source_context or source_context())
 
 
 @app.get("/model/performance", response_model=ModelPerformance)
