@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     football_data_base_url: str = "https://api.football-data.org/v4"
     football_data_token: str | None = None
 
+    the_odds_api_base_url: str = "https://api.the-odds-api.com/v4"
+    the_odds_api_key: str | None = None
+    the_odds_api_regions: str = "eu,uk,us"
+    the_odds_api_markets: str = "h2h"
+    the_odds_api_odds_format: str = "decimal"
+
     worldcup_2026_public_base_url: str | None = None
     humhub_fwc_2026_base_url: str | None = None
     openfootball_worldcup_json_url: str = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
