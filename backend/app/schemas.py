@@ -62,6 +62,27 @@ class SourceFeatureBundle(BaseModel):
     model_adjustment_note: str = "No external source features applied yet."
 
 
+class ProbabilityComponent(BaseModel):
+    name: str
+    weight: float = Field(ge=0, le=1)
+    probabilities: Probabilities
+    active: bool = True
+    notes: str
+
+
+class PredictionDiagnostics(BaseModel):
+    components: list[ProbabilityComponent] = []
+    market_signal_used: bool = False
+    calibration_status: str = "uncalibrated_mvp"
+    risk_flags: list[str] = []
+    reason_codes: list[str] = []
+    evaluation_targets: dict[str, str] = {
+        "accuracy": "directional outcome hit rate",
+        "brier_score": "probability calibration and sharpness",
+        "log_loss": "penalizes overconfident wrong predictions",
+    }
+
+
 class PredictionResponse(BaseModel):
     fixture_id: str
     match: str
@@ -73,6 +94,7 @@ class PredictionResponse(BaseModel):
     model_version: str
     explanation: list[str]
     source_context: SourceFeatureBundle | None = None
+    diagnostics: PredictionDiagnostics | None = None
 
 
 class ManualPredictionInput(BaseModel):
