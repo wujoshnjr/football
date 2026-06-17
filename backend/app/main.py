@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
+from app.services.fixture_ingestion_service import FixtureIngestionService
 from app.services.odds_api_client import OddsApiClient, OddsApiError
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
@@ -134,6 +135,10 @@ def odds_error_response(exc: OddsApiError) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
 
 
+def fixture_ingestion():
+    return FixtureIngestionService(settings).ingest()
+
+
 def match_feature_rows(include_market: bool = False, sport_key: str | None = None):
     market_consensus = None
     if include_market:
@@ -154,6 +159,11 @@ def data_sources() -> list[DataSourceStatus]:
 @app.get("/data-sources/context")
 def data_source_context():
     return source_context()
+
+
+@app.get("/ingestion/fixtures")
+def ingestion_fixtures():
+    return fixture_ingestion()
 
 
 @app.get("/model/features")
