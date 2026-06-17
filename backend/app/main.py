@@ -126,16 +126,19 @@ def source_context():
     return SourceFusionService(settings).build_source_context()
 
 
-def match_feature_rows():
-    return build_match_feature_table(demo_fixtures(), source_context())
-
-
 def odds_client() -> OddsApiClient:
     return OddsApiClient(settings)
 
 
 def odds_error_response(exc: OddsApiError) -> HTTPException:
     return HTTPException(status_code=503, detail=str(exc))
+
+
+def match_feature_rows(include_market: bool = False, sport_key: str | None = None):
+    market_consensus = None
+    if include_market:
+        market_consensus = odds_client().market_consensus(sport_key=sport_key)
+    return build_match_feature_table(demo_fixtures(), source_context(), market_consensus=market_consensus)
 
 
 @app.get("/health")
@@ -159,8 +162,14 @@ def model_features():
 
 
 @app.get("/model/feature-table")
-def model_feature_table():
-    return match_feature_rows()
+def model_feature_table(
+    include_market: bool = Query(default=False, description="When true, call The Odds API and attach h2h market-consensus features."),
+    sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming."),
+):
+    try:
+        return match_feature_rows(include_market=include_market, sport_key=sport_key)
+    except OddsApiError as exc:
+        raise odds_error_response(exc) from exc
 
 
 @app.get("/odds/sports")
