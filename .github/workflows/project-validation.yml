@@ -27,8 +27,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      - name: Run source registry tests
-        run: pytest tests/test_source_registry.py
+      - name: Run backend tests
+        run: pytest tests
 
       - name: Generate source report
         run: python scripts/ingest_open_sources.py
