@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     api_football_base_url: str = "https://v3.football.api-sports.io"
     api_football_key: str | None = None
+    api_football_worldcup_league_id: int = 1
+    api_football_worldcup_season: int = 2026
 
     football_data_base_url: str = "https://api.football-data.org/v4"
     football_data_token: str | None = None
