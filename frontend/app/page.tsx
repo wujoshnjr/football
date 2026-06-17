@@ -36,7 +36,40 @@ type SourceContext = {
   model_adjustment_note: string;
 };
 
+type IngestionSource = {
+  source_key: string;
+  configured: boolean;
+  ok: boolean;
+  status_code?: number | null;
+  error?: string | null;
+  record_count: number;
+};
+
+type IngestionPayload = {
+  fixture_count: number;
+  generated_at: string;
+  usage_note: string;
+  sources: IngestionSource[];
+};
+
+type FeatureRow = {
+  fixture_id: string;
+  market_signal_available: boolean;
+  market_home_implied_probability?: number | null;
+  market_draw_implied_probability?: number | null;
+  market_away_implied_probability?: number | null;
+  market_bookmaker_count: number;
+  market_signal_note: string;
+};
+
+type FetchResult<T> = {
+  data: T;
+  ok: boolean;
+  error?: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const fixtureSource = 'auto';
 const finalStates = ['finished', 'final', 'full_time'];
 
 function isFinal(fixture: Fixture) {
@@ -44,45 +77,30 @@ function isFinal(fixture: Fixture) {
 }
 
 function matchStatus(fixture: Fixture) {
-  return isFinal(fixture) ? 'Final' : 'Upcoming';
+  return isFinal(fixture) ? '已完賽' : '未開賽';
 }
 
 function displayTime(value: string) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value.replaceAll('-', '/');
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return 'Time TBD';
+  if (Number.isNaN(parsed.getTime())) return '時間待定';
   return parsed.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 }
 
-async function getFixtures(): Promise<Fixture[]> {
+async function getJson<T>(path: string, fallback: T): Promise<FetchResult<T>> {
   try {
-    const response = await fetch(`${API_BASE_URL}/fixtures`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Backend unavailable');
-    return response.json();
-  } catch {
-    return [];
+    const response = await fetch(`${API_BASE_URL}${path}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return { data: await response.json(), ok: true };
+  } catch (error) {
+    return { data: fallback, ok: false, error: error instanceof Error ? error.message : 'unknown error' };
   }
 }
 
 async function getForecast(fixture: Fixture): Promise<Forecast | null> {
   if (isFinal(fixture)) return null;
-  try {
-    const response = await fetch(`${API_BASE_URL}/predictions/${fixture.id}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Forecast unavailable');
-    return response.json();
-  } catch {
-    return null;
-  }
-}
-
-async function getSourceContext(): Promise<SourceContext | null> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/data-sources/context`, { cache: 'no-store' });
-    if (!response.ok) throw new Error('Source context unavailable');
-    return response.json();
-  } catch {
-    return null;
-  }
+  const result = await getJson<Forecast | null>(`/predictions/${fixture.id}?source=${fixtureSource}`, null);
+  return result.data;
 }
 
 function PercentBar({ label, value }: { label: string; value: number }) {
@@ -99,7 +117,27 @@ function PercentBar({ label, value }: { label: string; value: number }) {
   );
 }
 
-function MatchCard({ fixture, forecast }: { fixture: Fixture; forecast: Forecast | null }) {
+function MarketSignal({ row }: { row?: FeatureRow }) {
+  if (!row) return <p className="warning">尚未取得 feature table。</p>;
+  if (!row.market_signal_available) {
+    return <p className="warning">市場訊號尚未匹配。通常是 fixture 名稱、sport key 或賽事時間尚未與 The Odds API upcoming 資料對上。</p>;
+  }
+  return (
+    <div className="signalGrid">
+      <div><span>主勝隱含率</span><strong>{percent(row.market_home_implied_probability)}</strong></div>
+      <div><span>和局隱含率</span><strong>{percent(row.market_draw_implied_probability)}</strong></div>
+      <div><span>客勝隱含率</span><strong>{percent(row.market_away_implied_probability)}</strong></div>
+      <div><span>Bookmakers</span><strong>{row.market_bookmaker_count}</strong></div>
+    </div>
+  );
+}
+
+function percent(value?: number | null) {
+  if (typeof value !== 'number') return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+function MatchCard({ fixture, forecast, feature }: { fixture: Fixture; forecast: Forecast | null; feature?: FeatureRow }) {
   const done = isFinal(fixture);
 
   return (
@@ -115,22 +153,23 @@ function MatchCard({ fixture, forecast }: { fixture: Fixture; forecast: Forecast
       {done ? (
         <>
           <div className="metrics">
-            <div><span>Final Score</span><strong>{fixture.home_score} : {fixture.away_score}</strong></div>
-            <div><span>Card Type</span><strong>Result</strong></div>
+            <div><span>最終比分</span><strong>{fixture.home_score} : {fixture.away_score}</strong></div>
+            <div><span>卡片類型</span><strong>結果</strong></div>
           </div>
-          <ul className="reasons"><li>Completed match. The card displays the verified score instead of a pre-match forecast.</li></ul>
+          <ul className="reasons"><li>已完賽，只顯示比分，不把賽後資料混入賽前預測。</li></ul>
         </>
       ) : forecast ? (
         <>
           <div className="probabilities">
-            <PercentBar label="Home" value={forecast.probabilities.home_win} />
-            <PercentBar label="Draw" value={forecast.probabilities.draw} />
-            <PercentBar label="Away" value={forecast.probabilities.away_win} />
+            <PercentBar label="主勝" value={forecast.probabilities.home_win} />
+            <PercentBar label="和局" value={forecast.probabilities.draw} />
+            <PercentBar label="客勝" value={forecast.probabilities.away_win} />
           </div>
           <div className="metrics">
-            <div><span>Expected Goals</span><strong>{forecast.expected_goals.home} : {forecast.expected_goals.away}</strong></div>
-            <div><span>Confidence</span><strong>{forecast.confidence}</strong></div>
+            <div><span>預期進球</span><strong>{forecast.expected_goals.home} : {forecast.expected_goals.away}</strong></div>
+            <div><span>信心等級</span><strong>{forecast.confidence}</strong></div>
           </div>
+          <MarketSignal row={feature} />
           <div className="scores">
             {forecast.most_likely_scores.slice(0, 3).map((item) => <span key={item.score}>{item.score} · {Math.round(item.probability * 100)}%</span>)}
           </div>
@@ -138,51 +177,105 @@ function MatchCard({ fixture, forecast }: { fixture: Fixture; forecast: Forecast
           <p className="version">Model: {forecast.model_version}</p>
         </>
       ) : (
-        <p className="warning">Forecast unavailable. Please check backend data status.</p>
+        <p className="warning">預測暫時不可用，請檢查後端、fixture source 或資料源狀態。</p>
       )}
     </article>
   );
 }
 
+function StatusChip({ ok, label }: { ok: boolean; label: string }) {
+  return <span className={ok ? 'chip ok' : 'chip bad'}>{label}</span>;
+}
+
 export default async function HomePage() {
-  const fixtures = await getFixtures();
-  const sourceContext = await getSourceContext();
+  const [fixtureResult, sourceResult, ingestionResult, featureResult] = await Promise.all([
+    getJson<Fixture[]>(`/fixtures?source=${fixtureSource}`, []),
+    getJson<SourceContext | null>('/data-sources/context', null),
+    getJson<IngestionPayload | null>('/ingestion/fixtures', null),
+    getJson<FeatureRow[]>(`/model/feature-table?source=${fixtureSource}`, []),
+  ]);
+
+  const fixtures = fixtureResult.data;
+  const sourceContext = sourceResult.data;
+  const ingestion = ingestionResult.data;
+  const featureRows = featureResult.data;
+  const featureByFixture = new Map(featureRows.map((row) => [row.fixture_id, row]));
   const forecasts = await Promise.all(fixtures.map((fixture) => getForecast(fixture)));
   const finalCount = fixtures.filter(isFinal).length;
   const upcoming = fixtures.filter((fixture) => !isFinal(fixture));
   const featured = upcoming.slice(0, 2);
   const topTeams = Array.from(new Map(fixtures.flatMap((fixture) => [fixture.home_team, fixture.away_team]).map((team) => [team.id, team])).values()).sort((a, b) => b.elo_rating - a.elo_rating).slice(0, 5);
+  const backendHealthy = fixtureResult.ok && sourceResult.ok;
+  const ingestionHealthy = Boolean(ingestion && ingestion.fixture_count > 0);
 
   return (
     <main className="page">
       <nav className="topbar">
         <div className="brand"><span>⚽</span> World Cup IQ</div>
-        <div className="navlinks"><a href="#schedule">賽程</a><a href="#ai">AI預測</a><a href="#teams">球隊</a><a href="#sources">資料源</a></div>
+        <div className="navlinks"><a href="#diagnostics">診斷</a><a href="#schedule">賽程</a><a href="#ai">AI預測</a><a href="#sources">資料源</a><a href="#teams">球隊</a></div>
       </nav>
 
       <section className="hero">
         <p className="eyebrow">World Cup Match Intelligence</p>
         <h1>世界盃足球情報站</h1>
-        <p className="subtitle">專注賽程、比分、AI 賽前分析與資料源透明度；不加入鑽石或競猜場。</p>
-        <div className="heroActions"><a href="#schedule">查看賽程</a><a href="#ai">AI 預測</a><a href="#sources">資料源狀態</a></div>
+        <p className="subtitle">整合賽程、比分、AI 賽前分析、資料源透明度與市場共識訊號；不加入鑽石、競猜場或下注執行。</p>
+        <div className="heroActions"><a href="#diagnostics">先看系統狀態</a><a href="#schedule">查看賽程</a><a href="#ai">AI 預測</a></div>
         <div className="metrics heroMetrics">
-          <div><span>Tracked Matches</span><strong>{fixtures.length}</strong></div>
-          <div><span>Upcoming</span><strong>{upcoming.length}</strong></div>
-          <div><span>Final</span><strong>{finalCount}</strong></div>
+          <div><span>追蹤賽事</span><strong>{fixtures.length}</strong></div>
+          <div><span>未開賽</span><strong>{upcoming.length}</strong></div>
+          <div><span>已完賽</span><strong>{finalCount}</strong></div>
         </div>
       </section>
+
+      <section className="section" id="diagnostics">
+        <div className="sectionHead"><p>Diagnostics</p><h2>系統狀態與問題診斷</h2><span>不再靜默失敗</span></div>
+        <div className="diagnosticGrid">
+          <div className="panel">
+            <p className="eyebrow">Backend</p>
+            <h2>後端連線</h2>
+            <StatusChip ok={backendHealthy} label={backendHealthy ? '正常' : '異常'} />
+            <p className="time">API Base：{API_BASE_URL}</p>
+            {!fixtureResult.ok ? <p className="warning">/fixtures 失敗：{fixtureResult.error}</p> : null}
+            {!sourceResult.ok ? <p className="warning">/data-sources/context 失敗：{sourceResult.error}</p> : null}
+          </div>
+          <div className="panel">
+            <p className="eyebrow">Fixture Ingestion</p>
+            <h2>真實賽程入口</h2>
+            <StatusChip ok={ingestionHealthy} label={ingestionHealthy ? '有資料' : '待確認'} />
+            <p className="time">Normalized fixtures：{ingestion?.fixture_count ?? 0}</p>
+            <div className="sourceList">
+              {ingestion?.sources?.map((source) => (
+                <div key={source.source_key}><span>{source.source_key}</span><strong>{source.ok ? `${source.record_count} 筆` : source.error ?? 'failed'}</strong></div>
+              )) ?? <p className="warning">尚未取得 ingestion 狀態。</p>}
+            </div>
+          </div>
+          <div className="panel">
+            <p className="eyebrow">Market Signal</p>
+            <h2>The Odds API</h2>
+            <StatusChip ok={featureRows.some((row) => row.market_signal_available)} label={featureRows.some((row) => row.market_signal_available) ? '已匹配' : '尚未匹配'} />
+            <p className="time">目前頁面預設不呼叫 odds endpoint，避免消耗免費額度。需要完整 odds 時請測後端 include_market=true。</p>
+          </div>
+        </div>
+      </section>
+
+      {fixtures.length === 0 ? (
+        <section className="emptyState">
+          <h2>目前沒有賽程資料</h2>
+          <p>優先檢查 Render 後端是否部署成功、`NEXT_PUBLIC_API_BASE_URL` 是否指向 Render，以及 `/ingestion/fixtures` 是否有資料。</p>
+        </section>
+      ) : null}
 
       <section className="section" id="ai">
         <div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>只顯示未開賽賽事</span></div>
         <div className="spotlight">
-          {featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[fixtures.indexOf(fixture)]} />)}
+          {featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[fixtures.indexOf(fixture)]} feature={featureByFixture.get(fixture.id)} />)}
         </div>
       </section>
 
       <section className="section" id="schedule">
-        <div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>所有時間以台灣時間顯示</span></div>
+        <div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>source={fixtureSource}，所有時間以台灣時間顯示</span></div>
         <section className="grid">
-          {fixtures.map((fixture, index) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[index]} />)}
+          {fixtures.map((fixture, index) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecasts[index]} feature={featureByFixture.get(fixture.id)} />)}
         </section>
       </section>
 
@@ -193,6 +286,7 @@ export default async function HomePage() {
           <div className="sourceMeter"><strong>{sourceContext ? Math.round(sourceContext.reliability_score * 100) : 0}%</strong><span>source reliability</span></div>
           <p className="time">已啟用：{sourceContext?.sources_configured?.length ?? 0} 個來源</p>
           <p className="time">待補齊：{sourceContext?.sources_missing?.length ?? 0} 個來源</p>
+          <p className="warning">{sourceContext?.model_adjustment_note ?? '尚未取得 source context。'}</p>
         </div>
 
         <div className="panel" id="teams">
@@ -205,9 +299,9 @@ export default async function HomePage() {
       </section>
 
       <section className="articleStrip">
-        <article><p>賽事解讀</p><h3>已完賽回顧：只顯示比分，不混入賽前預測</h3></article>
-        <article><p>模型筆記</p><h3>下一步接入真實 fixture、form、odds、xG 特徵</h3></article>
-        <article><p>產品路線</p><h3>先做情報站，再做會員與個人追蹤功能</h3></article>
+        <article><p>問題修正</p><h3>新增後端錯誤顯示、ingestion 狀態、market signal 狀態，不再只顯示空白。</h3></article>
+        <article><p>資料策略</p><h3>source=auto 優先使用 ingestion，失敗才退回 demo。</h3></article>
+        <article><p>下一步</p><h3>將 odds 匹配成功率與真實 fixture source 顯示成正式資料品質儀表板。</h3></article>
       </section>
 
       <footer className="footer">World Cup IQ — AI predictions are informational analysis only.</footer>
