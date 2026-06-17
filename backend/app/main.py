@@ -6,7 +6,6 @@ from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelP
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
 from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
-from app.services.odds_api_client import OddsApiClient, OddsApiError
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 
@@ -141,21 +140,6 @@ def source_context():
     return SourceFusionService(settings).build_source_context()
 
 
-def odds_client() -> OddsApiClient:
-    return OddsApiClient(settings)
-
-
-def odds_error_response(exc: OddsApiError) -> HTTPException:
-    return HTTPException(status_code=503, detail=str(exc))
-
-
-def parse_sport_keys(sport_keys: str | None) -> list[str] | None:
-    if not sport_keys:
-        return None
-    parsed = [item.strip() for item in sport_keys.split(",") if item.strip()]
-    return parsed or None
-
-
 def fixture_ingestion():
     return FixtureIngestionService(settings).ingest()
 
@@ -195,21 +179,8 @@ def fixtures_by_source(source: str = "auto") -> list[Fixture]:
     raise HTTPException(status_code=400, detail="source must be one of: auto, demo, ingestion")
 
 
-def match_feature_rows(include_market: bool = False, sport_key: str | None = None, source: str = "auto"):
-    market_consensus = None
-    if include_market:
-        market_consensus = odds_client().market_consensus(sport_key=sport_key)
-    return build_match_feature_table(fixtures_by_source(source), source_context(), market_consensus=market_consensus)
-
-
-def market_signal_for_fixture(fixture_id: str, include_market: bool = False, sport_key: str | None = None, source: str = "auto"):
-    if not include_market:
-        return None
-    rows = match_feature_rows(include_market=True, sport_key=sport_key, source=source)
-    for row in rows:
-        if row.get("fixture_id") == fixture_id:
-            return row
-    return None
+def match_feature_rows(source: str = "auto"):
+    return build_match_feature_table(fixtures_by_source(source), source_context(), market_consensus=None)
 
 
 @app.get("/health")
@@ -239,52 +210,9 @@ def model_features():
 
 @app.get("/model/feature-table")
 def model_feature_table(
-    include_market: bool = Query(default=False, description="When true, call The Odds API and attach h2h market-consensus features."),
-    sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming."),
     source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
 ):
-    try:
-        return match_feature_rows(include_market=include_market, sport_key=sport_key, source=source)
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
-
-
-@app.get("/odds/sports")
-def odds_sports(include_all: bool = Query(default=False, description="Return all sports when true; default returns in-season sports.")):
-    try:
-        return odds_client().sports(include_all=include_all)
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
-
-
-@app.get("/odds/upcoming")
-def odds_upcoming(sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming.")):
-    try:
-        return odds_client().odds(sport_key=sport_key)
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
-
-
-@app.get("/odds/tomorrow")
-def odds_tomorrow(
-    sport_keys: str | None = Query(default=None, description="Comma-separated The Odds API soccer sport keys. Defaults to common active soccer leagues."),
-    timezone_name: str = Query(default="Asia/Taipei", description="Local timezone used to define tomorrow's date window."),
-):
-    try:
-        return odds_client().tomorrow_market_consensus(
-            sport_keys=parse_sport_keys(sport_keys),
-            timezone_name=timezone_name,
-        )
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
-
-
-@app.get("/odds/market-consensus")
-def odds_market_consensus(sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming.")):
-    try:
-        return odds_client().market_consensus(sport_key=sport_key)
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
+    return match_feature_rows(source=source)
 
 
 @app.get("/fixtures", response_model=list[Fixture])
@@ -304,26 +232,16 @@ def get_fixture(fixture_id: str, source: str = Query(default="auto", description
 def get_prediction(
     fixture_id: str,
     source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
-    include_market: bool = Query(default=False, description="When true, call The Odds API and blend matching market-consensus signal."),
-    sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming."),
 ):
-    try:
-        fixture = get_fixture(fixture_id, source=source)
-        if fixture.status.lower() in {"finished", "final", "full_time"}:
-            raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
-        service = PredictionService(model_version=settings.model_version)
-        return service.predict_fixture(
-            fixture,
-            source_context=source_context(),
-            market_signal=market_signal_for_fixture(
-                fixture_id=fixture.id,
-                include_market=include_market,
-                sport_key=sport_key,
-                source=source,
-            ),
-        )
-    except OddsApiError as exc:
-        raise odds_error_response(exc) from exc
+    fixture = get_fixture(fixture_id, source=source)
+    if fixture.status.lower() in {"finished", "final", "full_time"}:
+        raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
+    service = PredictionService(model_version=settings.model_version)
+    return service.predict_fixture(
+        fixture,
+        source_context=source_context(),
+        market_signal=None,
+    )
 
 
 @app.post("/predictions/manual")
