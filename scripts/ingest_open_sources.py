@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +47,7 @@ def endpoint_for(source_key: str, settings) -> str | None:
         "zafronix_worldcup": settings.zafronix_worldcup_base_url,
         "football_data": settings.football_data_base_url,
         "api_football": settings.api_football_base_url,
+        "the_odds_api": settings.the_odds_api_base_url,
         "worldcup_2026_api": settings.worldcup_2026_public_base_url,
         "statsbomb_open_data": settings.statsbomb_open_data_base_url,
         "openfootball_worldcup_json": settings.openfootball_worldcup_json_url,
