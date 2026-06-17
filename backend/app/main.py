@@ -18,63 +18,103 @@ app.add_middleware(
 )
 
 
+def team(
+    team_id: str,
+    name: str,
+    country: str,
+    fifa_rank: int | None,
+    elo_rating: float,
+    recent_points_per_match: float,
+    goals_for_per_match: float,
+    goals_against_per_match: float,
+) -> TeamSnapshot:
+    return TeamSnapshot(
+        id=team_id,
+        name=name,
+        country=country,
+        fifa_rank=fifa_rank,
+        elo_rating=elo_rating,
+        recent_points_per_match=recent_points_per_match,
+        goals_for_per_match=goals_for_per_match,
+        goals_against_per_match=goals_against_per_match,
+    )
+
+
 def demo_fixtures() -> list[Fixture]:
-    argentina = TeamSnapshot(
-        id="arg",
-        name="Argentina",
-        country="Argentina",
-        fifa_rank=1,
-        elo_rating=2140,
-        recent_points_per_match=2.2,
-        goals_for_per_match=1.9,
-        goals_against_per_match=0.7,
-    )
-    algeria = TeamSnapshot(
-        id="alg",
-        name="Algeria",
-        country="Algeria",
-        fifa_rank=37,
-        elo_rating=1760,
-        recent_points_per_match=1.6,
-        goals_for_per_match=1.4,
-        goals_against_per_match=1.1,
-    )
-    japan = TeamSnapshot(
-        id="jpn",
-        name="Japan",
-        country="Japan",
-        fifa_rank=18,
-        elo_rating=1845,
-        recent_points_per_match=2.0,
-        goals_for_per_match=1.8,
-        goals_against_per_match=0.9,
-    )
-    netherlands = TeamSnapshot(
-        id="ned",
-        name="Netherlands",
-        country="Netherlands",
-        fifa_rank=7,
-        elo_rating=1995,
-        recent_points_per_match=1.9,
-        goals_for_per_match=1.7,
-        goals_against_per_match=0.8,
-    )
+    """Temporary verified fixtures until full live ingestion is enabled.
+
+    Finished matches show scores instead of being treated as upcoming predictions.
+    Upcoming matches keep date-only kickoff values when exact kickoff time is not yet
+    synced from the live provider.
+    """
+
+    argentina = team("arg", "Argentina", "Argentina", 2, 2140, 2.2, 1.9, 0.7)
+    algeria = team("alg", "Algeria", "Algeria", 35, 1760, 1.6, 1.4, 1.1)
+    japan = team("jpn", "Japan", "Japan", 18, 1845, 2.0, 1.8, 0.9)
+    netherlands = team("ned", "Netherlands", "Netherlands", 7, 1995, 1.9, 1.7, 0.8)
+    austria = team("aut", "Austria", "Austria", 24, 1840, 1.8, 1.6, 1.0)
+    jordan = team("jor", "Jordan", "Jordan", 66, 1585, 1.4, 1.2, 1.4)
+    sweden = team("swe", "Sweden", "Sweden", 43, 1780, 1.6, 1.5, 1.1)
+    tunisia = team("tun", "Tunisia", "Tunisia", 40, 1730, 1.5, 1.1, 1.0)
+
     return [
         Fixture(
-            id="demo-arg-alg-2026",
+            id="arg-alg-2026-final",
             home_team=argentina,
             away_team=algeria,
             kickoff_time="2026-06-17T01:00:00Z",
-            venue="TBD",
-            stage="Group Stage",
+            venue="Kansas City Stadium",
+            stage="Group J",
+            status="finished",
+            home_score=3,
+            away_score=0,
         ),
         Fixture(
-            id="demo-ned-jpn-2026",
+            id="ned-jpn-2026-final",
             home_team=netherlands,
             away_team=japan,
             kickoff_time="2026-06-14T20:00:00Z",
-            venue="TBD",
-            stage="Group Stage",
+            venue="Dallas Stadium",
+            stage="Group F",
+            status="finished",
+            home_score=2,
+            away_score=2,
+        ),
+        Fixture(
+            id="ned-swe-2026",
+            home_team=netherlands,
+            away_team=sweden,
+            kickoff_time="2026-06-20",
+            venue="Houston Stadium",
+            stage="Group F",
+            status="scheduled",
+        ),
+        Fixture(
+            id="tun-jpn-2026",
+            home_team=tunisia,
+            away_team=japan,
+            kickoff_time="2026-06-20",
+            venue="Estadio Monterrey",
+            stage="Group F",
+            status="scheduled",
+        ),
+        Fixture(
+            id="arg-aut-2026",
+            home_team=argentina,
+            away_team=austria,
+            kickoff_time="2026-06-22",
+            venue="Dallas Stadium",
+            stage="Group J",
+            status="scheduled",
+        ),
+        Fixture(
+            id="jor-alg-2026",
+            home_team=jordan,
+            away_team=algeria,
+            kickoff_time="2026-06-22",
+            venue="San Francisco Bay Area Stadium",
+            stage="Group J",
+            status="scheduled",
         ),
     ]
 
@@ -113,8 +153,11 @@ def get_fixture(fixture_id: str) -> Fixture:
 
 @app.get("/predictions/{fixture_id}")
 def get_prediction(fixture_id: str):
+    fixture = get_fixture(fixture_id)
+    if fixture.status.lower() in {"finished", "final", "full_time"}:
+        raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
     service = PredictionService(model_version=settings.model_version)
-    return service.predict_fixture(get_fixture(fixture_id), source_context=source_context())
+    return service.predict_fixture(fixture, source_context=source_context())
 
 
 @app.post("/predictions/manual")
