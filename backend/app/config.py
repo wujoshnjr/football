@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     football_data_base_url: str = "https://api.football-data.org/v4"
     football_data_token: str | None = None
+    football_data_worldcup_competition_code: str = "WC"
 
     worldcup_2026_public_base_url: str | None = None
     humhub_fwc_2026_base_url: str | None = None
