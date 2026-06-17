@@ -5,7 +5,7 @@ from app.config import get_settings
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
-from app.services.fixture_ingestion_service import FixtureIngestionService
+from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
 from app.services.odds_api_client import OddsApiClient, OddsApiError
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
@@ -41,6 +41,20 @@ def team(
         recent_points_per_match=recent_points_per_match,
         goals_for_per_match=goals_for_per_match,
         goals_against_per_match=goals_against_per_match,
+    )
+
+
+def neutral_team(name: str) -> TeamSnapshot:
+    team_id = normalize_name(name)[:12] or "team"
+    return team(
+        team_id=team_id,
+        name=name,
+        country=name,
+        fifa_rank=None,
+        elo_rating=1500,
+        recent_points_per_match=1.4,
+        goals_for_per_match=1.2,
+        goals_against_per_match=1.2,
     )
 
 
@@ -139,11 +153,46 @@ def fixture_ingestion():
     return FixtureIngestionService(settings).ingest()
 
 
-def match_feature_rows(include_market: bool = False, sport_key: str | None = None):
+def ingested_fixtures() -> list[Fixture]:
+    payload = fixture_ingestion()
+    fixtures: list[Fixture] = []
+    for record in payload.get("fixtures", []):
+        home_name = record.get("home_team_name")
+        away_name = record.get("away_team_name")
+        if not home_name or not away_name:
+            continue
+        fixtures.append(
+            Fixture(
+                id=record.get("id") or f"{normalize_name(home_name)}-{normalize_name(away_name)}",
+                home_team=neutral_team(home_name),
+                away_team=neutral_team(away_name),
+                kickoff_time=record.get("kickoff_time") or "unknown",
+                venue=record.get("venue"),
+                stage=record.get("stage") or "unknown",
+                status=record.get("status") or "scheduled",
+                home_score=record.get("home_score"),
+                away_score=record.get("away_score"),
+            )
+        )
+    return fixtures
+
+
+def fixtures_by_source(source: str = "auto") -> list[Fixture]:
+    if source == "demo":
+        return demo_fixtures()
+    if source == "ingestion":
+        return ingested_fixtures()
+    if source == "auto":
+        ingested = ingested_fixtures()
+        return ingested or demo_fixtures()
+    raise HTTPException(status_code=400, detail="source must be one of: auto, demo, ingestion")
+
+
+def match_feature_rows(include_market: bool = False, sport_key: str | None = None, source: str = "auto"):
     market_consensus = None
     if include_market:
         market_consensus = odds_client().market_consensus(sport_key=sport_key)
-    return build_match_feature_table(demo_fixtures(), source_context(), market_consensus=market_consensus)
+    return build_match_feature_table(fixtures_by_source(source), source_context(), market_consensus=market_consensus)
 
 
 @app.get("/health")
@@ -175,9 +224,10 @@ def model_features():
 def model_feature_table(
     include_market: bool = Query(default=False, description="When true, call The Odds API and attach h2h market-consensus features."),
     sport_key: str | None = Query(default=None, description="The Odds API sport key. Defaults to settings value or upcoming."),
+    source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
 ):
     try:
-        return match_feature_rows(include_market=include_market, sport_key=sport_key)
+        return match_feature_rows(include_market=include_market, sport_key=sport_key, source=source)
     except OddsApiError as exc:
         raise odds_error_response(exc) from exc
 
@@ -207,21 +257,21 @@ def odds_market_consensus(sport_key: str | None = Query(default=None, descriptio
 
 
 @app.get("/fixtures", response_model=list[Fixture])
-def list_fixtures() -> list[Fixture]:
-    return demo_fixtures()
+def list_fixtures(source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion.")) -> list[Fixture]:
+    return fixtures_by_source(source)
 
 
 @app.get("/fixtures/{fixture_id}", response_model=Fixture)
-def get_fixture(fixture_id: str) -> Fixture:
-    for fixture in demo_fixtures():
+def get_fixture(fixture_id: str, source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion.")) -> Fixture:
+    for fixture in fixtures_by_source(source):
         if fixture.id == fixture_id:
             return fixture
     raise HTTPException(status_code=404, detail="Fixture not found")
 
 
 @app.get("/predictions/{fixture_id}")
-def get_prediction(fixture_id: str):
-    fixture = get_fixture(fixture_id)
+def get_prediction(fixture_id: str, source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion.")):
+    fixture = get_fixture(fixture_id, source=source)
     if fixture.status.lower() in {"finished", "final", "full_time"}:
         raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
     service = PredictionService(model_version=settings.model_version)
