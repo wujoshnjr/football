@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
+from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 
@@ -136,6 +137,11 @@ def data_sources() -> list[DataSourceStatus]:
 @app.get("/data-sources/context")
 def data_source_context():
     return source_context()
+
+
+@app.get("/model/features")
+def model_features():
+    return advanced_feature_registry()
 
 
 @app.get("/fixtures", response_model=list[Fixture])
