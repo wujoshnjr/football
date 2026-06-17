@@ -16,7 +16,6 @@ EXPECTED_SOURCE_KEYS = {
     "zafronix_worldcup",
     "football_data",
     "api_football",
-    "the_odds_api",
     "worldcup_2026_api",
     "statsbomb_open_data",
     "openfootball_worldcup_json",
