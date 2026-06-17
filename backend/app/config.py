@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     the_odds_api_base_url: str = "https://api.the-odds-api.com/v4"
     the_odds_api_key: str | None = None
+    the_odds_api_sport_key: str = "upcoming"
     the_odds_api_regions: str = "eu,uk,us"
     the_odds_api_markets: str = "h2h"
     the_odds_api_odds_format: str = "decimal"
