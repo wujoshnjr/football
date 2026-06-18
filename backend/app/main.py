@@ -8,6 +8,7 @@ from app.services.feature_table_service import build_match_feature_table
 from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
+from app.services.tournamental_odds_client import TournamentalOddsClient
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.model_version)
@@ -183,6 +184,10 @@ def match_feature_rows(source: str = "auto"):
     return build_match_feature_table(fixtures_by_source(source), source_context(), market_consensus=None)
 
 
+def tournamental_odds():
+    return TournamentalOddsClient(settings)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
@@ -213,6 +218,36 @@ def model_feature_table(
     source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
 ):
     return match_feature_rows(source=source)
+
+
+@app.get("/market/worldcup/health")
+def worldcup_market_health():
+    return tournamental_odds().health()
+
+
+@app.get("/market/worldcup/snapshot")
+def worldcup_market_snapshot():
+    return tournamental_odds().snapshot()
+
+
+@app.get("/market/worldcup/markets")
+def worldcup_market_markets():
+    return tournamental_odds().markets()
+
+
+@app.get("/market/worldcup/match/{match_no}")
+def worldcup_market_match(match_no: str):
+    return tournamental_odds().match(match_no)
+
+
+@app.get("/market/worldcup/team/{code}/winner")
+def worldcup_market_team_winner(code: str):
+    return tournamental_odds().team_winner(code)
+
+
+@app.get("/market/worldcup/team/{code}/group")
+def worldcup_market_team_group(code: str):
+    return tournamental_odds().team_group(code)
 
 
 @app.get("/fixtures", response_model=list[Fixture])
