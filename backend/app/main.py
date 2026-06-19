@@ -9,7 +9,7 @@ from app.services.fixture_ingestion_service import FixtureIngestionService, norm
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 from app.services.tournamental_odds_client import TournamentalOddsClient
-from app.services.tournamental_odds_normalizer import normalize_tournamental_snapshot
+from app.services.tournamental_odds_normalizer import find_market_signal_for_fixture, normalize_tournamental_snapshot
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.model_version)
@@ -189,6 +189,13 @@ def tournamental_odds():
     return TournamentalOddsClient(settings)
 
 
+def normalized_market_snapshot() -> dict | None:
+    result = tournamental_odds().snapshot()
+    if not result.ok:
+        return None
+    return normalize_tournamental_snapshot(result.__dict__)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
@@ -233,10 +240,10 @@ def worldcup_market_snapshot():
 
 @app.get("/market/worldcup/snapshot/normalized")
 def worldcup_market_snapshot_normalized():
-    result = tournamental_odds().snapshot()
-    if not result.ok:
-        return result
-    return normalize_tournamental_snapshot(result.__dict__)
+    normalized = normalized_market_snapshot()
+    if normalized is None:
+        return tournamental_odds().snapshot()
+    return normalized
 
 
 @app.get("/market/worldcup/markets")
@@ -280,11 +287,13 @@ def get_prediction(
     fixture = get_fixture(fixture_id, source=source)
     if fixture.status.lower() in {"finished", "final", "full_time"}:
         raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
+    market_snapshot = normalized_market_snapshot()
+    market_signal = find_market_signal_for_fixture(fixture, market_snapshot) if market_snapshot else None
     service = PredictionService(model_version=settings.model_version)
     return service.predict_fixture(
         fixture,
         source_context=source_context(),
-        market_signal=None,
+        market_signal=market_signal,
     )
 
 
