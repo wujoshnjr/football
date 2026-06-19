@@ -9,6 +9,7 @@ from app.services.fixture_ingestion_service import FixtureIngestionService, norm
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 from app.services.tournamental_odds_client import TournamentalOddsClient
+from app.services.tournamental_odds_normalizer import normalize_tournamental_snapshot
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.model_version)
@@ -228,6 +229,14 @@ def worldcup_market_health():
 @app.get("/market/worldcup/snapshot")
 def worldcup_market_snapshot():
     return tournamental_odds().snapshot()
+
+
+@app.get("/market/worldcup/snapshot/normalized")
+def worldcup_market_snapshot_normalized():
+    result = tournamental_odds().snapshot()
+    if not result.ok:
+        return result
+    return normalize_tournamental_snapshot(result.__dict__)
 
 
 @app.get("/market/worldcup/markets")
