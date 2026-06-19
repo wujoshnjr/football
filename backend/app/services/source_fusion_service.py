@@ -6,6 +6,7 @@ from app.schemas import DataSourceStatus, SourceFeatureBundle
 EXCLUDED_FROM_FIXTURE_RELIABILITY = {
     "scraper",
     "public_market_api",
+    "external_prediction_benchmark",
     "offline_training",
     "weather_api",
     "news_api",
@@ -178,10 +179,22 @@ class SourceFusionService:
                 notes="Unstructured evidence source only. Do not treat a single article as prediction truth.",
             ),
             DataSourceStatus(
+                key="tournamental_bot_arena",
+                name="Tournamental Open Bot Arena",
+                category="external_prediction_benchmark",
+                priority=14,
+                reliability=0.62,
+                requires_key=True,
+                configured=configured["tournamental_bot_arena"],
+                enabled=enabled["tournamental_bot_arena"],
+                role="Read-only bot arena benchmark, match catalogue, odds, injury, and weather reference signals for paper tracking.",
+                notes="Not official, not a primary fixture or score source, and not a real-money betting source. Pick submission remains disabled unless explicitly enabled outside ingestion.",
+            ),
+            DataSourceStatus(
                 key="espn_scoreboard",
                 name="ESPN Scoreboard Endpoint",
                 category="unofficial_public_endpoint",
-                priority=14,
+                priority=15,
                 reliability=0.52,
                 requires_key=False,
                 configured=configured["espn_scoreboard"],
@@ -193,7 +206,7 @@ class SourceFusionService:
                 key="humhub_fwc_2026",
                 name="HumHub FWC 2026 Service",
                 category="public_endpoint",
-                priority=15,
+                priority=16,
                 reliability=0.46,
                 requires_key=False,
                 configured=configured["humhub_fwc_2026"],
@@ -205,7 +218,7 @@ class SourceFusionService:
                 key="tournamental_odds",
                 name="Tournamental Odds Ingest",
                 category="public_market_api",
-                priority=16,
+                priority=17,
                 reliability=0.84,
                 requires_key=False,
                 configured=configured["tournamental_odds"],
@@ -217,7 +230,7 @@ class SourceFusionService:
                 key="openfootball_worldcup_text",
                 name="OpenFootball worldcup text data",
                 category="open_data",
-                priority=17,
+                priority=18,
                 reliability=0.60,
                 requires_key=False,
                 configured=True,
@@ -229,7 +242,7 @@ class SourceFusionService:
                 key="soccerdata_package",
                 name="soccerdata Python package",
                 category="scraper",
-                priority=18,
+                priority=19,
                 reliability=0.46,
                 requires_key=False,
                 configured=True,
@@ -241,7 +254,7 @@ class SourceFusionService:
                 key="github_football_scrapers",
                 name="GitHub football scraper projects",
                 category="scraper",
-                priority=19,
+                priority=20,
                 reliability=0.40,
                 requires_key=False,
                 configured=True,
@@ -283,13 +296,18 @@ class SourceFusionService:
             sources_missing=missing_sources,
             reliability_score=reliability_score,
             fixture_consensus_score=consensus_score,
-            model_adjustment_note="Source registry is active. Fixture confidence is based on configured fixture sources only; weather, news, rankings, market signals, and offline training data are separate feature sources.",
+            model_adjustment_note="Source registry is active. Fixture confidence is based on configured fixture sources only; weather, news, rankings, market signals, bot arena benchmarks, and offline training data are separate feature sources.",
         )
 
     def _configured_flags(self) -> dict[str, bool]:
         return {
             "tournamental_odds": bool(getattr(self.settings, "tournamental_odds_base_url", None)),
             "tournamental_wc2026": bool(getattr(self.settings, "tournamental_wc2026_base_url", None)),
+            "tournamental_bot_arena": bool(
+                getattr(self.settings, "tournamental_api_key", None)
+                and getattr(self.settings, "tournamental_base_url", None)
+                and getattr(self.settings, "tournamental_tournament_id", None)
+            ),
             "zafronix_worldcup": bool(
                 getattr(self.settings, "zafronix_worldcup_key", None)
                 and getattr(self.settings, "zafronix_worldcup_base_url", None)
@@ -333,6 +351,10 @@ class SourceFusionService:
         return {
             "tournamental_odds": bool(getattr(self.settings, "tournamental_odds_enabled", False)),
             "tournamental_wc2026": bool(getattr(self.settings, "tournamental_wc2026_enabled", True)),
+            "tournamental_bot_arena": bool(
+                getattr(self.settings, "tournamental_enabled", False)
+                and getattr(self.settings, "tournamental_enable_read_only_feeds", True)
+            ),
             "zafronix_worldcup": bool(getattr(self.settings, "zafronix_worldcup_enabled", False)),
             "football_data": bool(getattr(self.settings, "football_data_enabled", True)),
             "api_football": bool(getattr(self.settings, "api_football_enabled", True)),
