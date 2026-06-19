@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,19 +43,56 @@ def probe_url(url: str | None) -> dict:
         return {"configured": True, "reachable": False, "status_code": None, "error": "timeout"}
 
 
+def url_with_query(base_url: str | None, path: str, params: dict[str, str] | None = None) -> str | None:
+    if not base_url:
+        return None
+    query = f"?{urlencode(params)}" if params else ""
+    safe_path = path if path.startswith("/") else f"/{path}"
+    return f"{base_url.rstrip('/')}{safe_path}{query}"
+
+
 def endpoint_for(source_key: str, settings) -> str | None:
     mapping = {
-        "tournamental_odds": settings.tournamental_odds_base_url,
-        "tournamental_wc2026": settings.tournamental_wc2026_base_url,
-        "zafronix_worldcup": settings.zafronix_worldcup_base_url,
         "football_data": settings.football_data_base_url,
-        "api_football": settings.api_football_base_url,
-        "worldcup_2026_api": settings.worldcup_2026_public_base_url,
-        "statsbomb_open_data": settings.statsbomb_open_data_base_url,
+        "api_football": url_with_query(
+            settings.api_football_base_url,
+            "/fixtures",
+            {
+                "league": str(settings.api_football_worldcup_league_id),
+                "season": str(settings.api_football_worldcup_season),
+            },
+        ),
+        "thestatsapi_worldcup": url_with_query(
+            settings.thestatsapi_base_url,
+            "/football/matches",
+            {
+                "competition_id": str(settings.thestatsapi_world_cup_competition_id or ""),
+                "season_id": str(settings.thestatsapi_world_cup_season_id or ""),
+                "page": "1",
+                "per_page": "100",
+            },
+        ),
+        "worldcup_2026_api": url_with_query(settings.worldcup_2026_public_base_url, "/get/games"),
+        "tournamental_wc2026": url_with_query(settings.tournamental_wc2026_base_url, "/v1/upcoming"),
+        "zafronix_worldcup": url_with_query(settings.zafronix_worldcup_base_url, "/matches", {"year": "2026"}),
+        "sportsdataio_worldcup": url_with_query(
+            settings.sportsdataio_base_url,
+            settings.sportsdataio_world_cup_fixtures_path.format(
+                competition_key=settings.sportsdataio_world_cup_competition_key or "missing_competition_key",
+                season=settings.sportsdataio_world_cup_season,
+            ),
+        ),
+        "thesportsdb_worldcup": url_with_query(
+            settings.thesportsdb_base_url,
+            f"/{settings.thesportsdb_api_key}/eventsseason.php",
+            {"id": settings.thesportsdb_world_cup_league_id, "s": settings.thesportsdb_world_cup_season},
+        ),
         "openfootball_worldcup_json": settings.openfootball_worldcup_json_url,
-        "openfootball_worldcup_text": "https://raw.githubusercontent.com/openfootball/worldcup/master/2026/worldcup.txt",
         "espn_scoreboard": settings.espn_scoreboard_url,
-        "humhub_fwc_2026": settings.humhub_fwc_2026_base_url,
+        "humhub_fwc_2026": url_with_query(settings.humhub_fwc_2026_base_url, "/matches"),
+        "tournamental_odds": settings.tournamental_odds_base_url,
+        "statsbomb_open_data": settings.statsbomb_open_data_base_url,
+        "openfootball_worldcup_text": "https://raw.githubusercontent.com/openfootball/worldcup/master/2026/worldcup.txt",
         "soccerdata_package": settings.soccerdata_project_url,
         "github_football_scrapers": "https://github.com/search?q=football+prediction+scraper&type=repositories",
     }
