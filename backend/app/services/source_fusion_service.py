@@ -3,6 +3,16 @@ from __future__ import annotations
 from app.schemas import DataSourceStatus, SourceFeatureBundle
 
 
+EXCLUDED_FROM_FIXTURE_RELIABILITY = {
+    "scraper",
+    "public_market_api",
+    "offline_training",
+    "weather_api",
+    "news_api",
+    "team_strength_source",
+}
+
+
 class SourceFusionService:
     def __init__(self, settings) -> None:
         self.settings = settings
@@ -32,8 +42,8 @@ class SourceFusionService:
                 requires_key=True,
                 configured=configured["api_football"],
                 enabled=enabled["api_football"],
-                role="Deep live data candidate for fixtures, lineups, events, injuries, standings, and match-day context.",
-                notes="Use around match day and cache aggressively because free quotas are limited.",
+                role="Deep live data candidate for fixtures, lineups, events, injuries, standings, statistics, and match-day context.",
+                notes="Use around match day and cache aggressively because free quotas are limited. Odds are excluded from betting recommendations.",
             ),
             DataSourceStatus(
                 key="thestatsapi_worldcup",
@@ -44,14 +54,38 @@ class SourceFusionService:
                 requires_key=True,
                 configured=configured["thestatsapi_worldcup"],
                 enabled=enabled["thestatsapi_worldcup"],
-                role="Trial/paid provider candidate for fixtures, groups, standings, match stats, xG, and player stats.",
+                role="Trial/paid provider candidate for fixtures, groups, standings, match stats, xG, player stats, and historical context.",
                 notes="First use only fixtures and standings-style data. Keep odds away from betting recommendations.",
             ),
             DataSourceStatus(
-                key="worldcup_2026_api",
-                name="World Cup 2026 Public API",
-                category="public_endpoint",
+                key="sportsdataio_worldcup",
+                name="SportsDataIO FIFA World Cup / Soccer API",
+                category="premium_api",
                 priority=4,
+                reliability=0.76,
+                requires_key=True,
+                configured=configured["sportsdataio_worldcup"],
+                enabled=enabled["sportsdataio_worldcup"],
+                role="Trial/paid provider candidate for schedules, scores, standings, lineups, stats, news, images, and optional odds signals.",
+                notes="World Cup 2026 identifiers are CompetitionId=21 and SeasonId=368. Odds remain external signal / paper tracking only.",
+            ),
+            DataSourceStatus(
+                key="fifa_ranking_source",
+                name="FIFA Men's World Ranking",
+                category="team_strength_source",
+                priority=5,
+                reliability=0.78,
+                requires_key=False,
+                configured=configured["fifa_ranking_source"],
+                enabled=enabled["fifa_ranking_source"],
+                role="Official public team ranking and ranking-point baseline for national-team strength priors.",
+                notes="Not a JSON fixture API. Use low-frequency snapshots; do not high-frequency scrape.",
+            ),
+            DataSourceStatus(
+                key="worldcup_2026_api",
+                name="World Cup 2026 Open Source API",
+                category="public_endpoint",
+                priority=6,
                 reliability=0.58,
                 requires_key=False,
                 configured=configured["worldcup_2026_api"],
@@ -63,7 +97,7 @@ class SourceFusionService:
                 key="tournamental_wc2026",
                 name="Tournamental WC2026 Live Data",
                 category="public_endpoint",
-                priority=5,
+                priority=7,
                 reliability=0.72,
                 requires_key=False,
                 configured=configured["tournamental_wc2026"],
@@ -75,7 +109,7 @@ class SourceFusionService:
                 key="zafronix_worldcup",
                 name="Zafronix World Cup API",
                 category="primary_api",
-                priority=6,
+                priority=8,
                 reliability=0.70,
                 requires_key=True,
                 configured=configured["zafronix_worldcup"],
@@ -84,22 +118,22 @@ class SourceFusionService:
                 notes="Treat as configurable fallback until endpoint stability and response schema are verified.",
             ),
             DataSourceStatus(
-                key="sportsdataio_worldcup",
-                name="SportsDataIO FIFA World Cup / Soccer API",
-                category="premium_api",
-                priority=7,
-                reliability=0.72,
-                requires_key=True,
-                configured=configured["sportsdataio_worldcup"],
-                enabled=enabled["sportsdataio_worldcup"],
-                role="Trial/paid candidate for real-time scores, fixtures, lineups, stats, odds, and historical data.",
-                notes="Use only when competition key and plan access are confirmed. Odds remain external signal / paper tracking only.",
+                key="openfootball_worldcup_json",
+                name="OpenFootball worldcup.json",
+                category="open_data",
+                priority=9,
+                reliability=0.64,
+                requires_key=False,
+                configured=configured["openfootball_worldcup_json"],
+                enabled=enabled["openfootball_worldcup_json"],
+                role="Public-domain JSON World Cup history and 2026 schedule data for seeding fixtures and offline regression tests.",
+                notes="Community-maintained static data. Cross-check with primary APIs before treating as final.",
             ),
             DataSourceStatus(
                 key="thesportsdb_worldcup",
                 name="TheSportsDB FIFA World Cup",
                 category="metadata_api",
-                priority=8,
+                priority=10,
                 reliability=0.54,
                 requires_key=False,
                 configured=configured["thesportsdb_worldcup"],
@@ -108,26 +142,50 @@ class SourceFusionService:
                 notes="Do not use as primary live-score truth. Best for metadata and artwork fallback.",
             ),
             DataSourceStatus(
-                key="openfootball_worldcup_json",
-                name="OpenFootball worldcup.json",
-                category="open_data",
-                priority=9,
-                reliability=0.64,
+                key="statsbomb_open_data",
+                name="StatsBomb Open Data",
+                category="offline_training",
+                priority=11,
+                reliability=0.80,
                 requires_key=False,
-                configured=True,
-                enabled=True,
-                role="Public-domain JSON World Cup history and 2026 schedule data for seeding fixtures and offline regression tests.",
-                notes="Community-maintained data. Cross-check with primary APIs before treating as final.",
+                configured=configured["statsbomb_open_data"],
+                enabled=enabled["statsbomb_open_data"],
+                role="Open event, lineup, match, competition, and selected 360 data for offline model training and xG feature engineering.",
+                notes="Not a live fixture source. Keep attribution when publishing analysis.",
+            ),
+            DataSourceStatus(
+                key="open_meteo_weather",
+                name="Open-Meteo Weather API",
+                category="weather_api",
+                priority=12,
+                reliability=0.66,
+                requires_key=False,
+                configured=configured["open_meteo_weather"],
+                enabled=enabled["open_meteo_weather"],
+                role="Venue temperature, humidity, precipitation, wind, and historical weather features when stadium coordinates are available.",
+                notes="Feature source only. It should enrich fixtures after venue coordinates exist, not create fixtures itself.",
+            ),
+            DataSourceStatus(
+                key="gdelt_news",
+                name="GDELT DOC API",
+                category="news_api",
+                priority=13,
+                reliability=0.50,
+                requires_key=False,
+                configured=configured["gdelt_news"],
+                enabled=enabled["gdelt_news"],
+                role="News, injury, suspension, travel disruption, coach-comment, and qualitative alert monitoring.",
+                notes="Unstructured evidence source only. Do not treat a single article as prediction truth.",
             ),
             DataSourceStatus(
                 key="espn_scoreboard",
                 name="ESPN Scoreboard Endpoint",
                 category="unofficial_public_endpoint",
-                priority=10,
+                priority=14,
                 reliability=0.52,
                 requires_key=False,
-                configured=True,
-                enabled=True,
+                configured=configured["espn_scoreboard"],
+                enabled=enabled["espn_scoreboard"],
                 role="No-key scoreboard fallback for match-day scores and status snapshots.",
                 notes="Unofficial endpoint. Response structure and availability may change without notice.",
             ),
@@ -135,7 +193,7 @@ class SourceFusionService:
                 key="humhub_fwc_2026",
                 name="HumHub FWC 2026 Service",
                 category="public_endpoint",
-                priority=11,
+                priority=15,
                 reliability=0.46,
                 requires_key=False,
                 configured=configured["humhub_fwc_2026"],
@@ -147,7 +205,7 @@ class SourceFusionService:
                 key="tournamental_odds",
                 name="Tournamental Odds Ingest",
                 category="public_market_api",
-                priority=12,
+                priority=16,
                 reliability=0.84,
                 requires_key=False,
                 configured=configured["tournamental_odds"],
@@ -156,22 +214,10 @@ class SourceFusionService:
                 notes="Market-consensus probability signal only. Not a betting execution source and not part of fixture ingestion.",
             ),
             DataSourceStatus(
-                key="statsbomb_open_data",
-                name="StatsBomb Open Data",
-                category="open_data",
-                priority=13,
-                reliability=0.80,
-                requires_key=False,
-                configured=True,
-                enabled=True,
-                role="Open event, lineup, match, competition, and selected 360 data for offline model training and xG feature engineering.",
-                notes="Not a live fixture source. Keep attribution when publishing analysis.",
-            ),
-            DataSourceStatus(
                 key="openfootball_worldcup_text",
                 name="OpenFootball worldcup text data",
                 category="open_data",
-                priority=14,
+                priority=17,
                 reliability=0.60,
                 requires_key=False,
                 configured=True,
@@ -183,7 +229,7 @@ class SourceFusionService:
                 key="soccerdata_package",
                 name="soccerdata Python package",
                 category="scraper",
-                priority=15,
+                priority=18,
                 reliability=0.46,
                 requires_key=False,
                 configured=True,
@@ -195,7 +241,7 @@ class SourceFusionService:
                 key="github_football_scrapers",
                 name="GitHub football scraper projects",
                 category="scraper",
-                priority=16,
+                priority=19,
                 reliability=0.40,
                 requires_key=False,
                 configured=True,
@@ -214,7 +260,7 @@ class SourceFusionService:
             source for source in registry
             if source.configured
             and source.enabled
-            and source.category not in {"scraper", "public_market_api"}
+            and source.category not in EXCLUDED_FROM_FIXTURE_RELIABILITY
         ]
         if not live_sources:
             return SourceFeatureBundle(
@@ -237,7 +283,7 @@ class SourceFusionService:
             sources_missing=missing_sources,
             reliability_score=reliability_score,
             fixture_consensus_score=consensus_score,
-            model_adjustment_note="Source registry is active. Current model confidence is adjusted by source reliability and source coverage; next phase should persist actual fixture, form, market, and xG features into a feature table.",
+            model_adjustment_note="Source registry is active. Fixture confidence is based on configured fixture sources only; weather, news, rankings, market signals, and offline training data are separate feature sources.",
         )
 
     def _configured_flags(self) -> dict[str, bool]:
@@ -260,13 +306,26 @@ class SourceFusionService:
             "sportsdataio_worldcup": bool(
                 getattr(self.settings, "sportsdataio_api_key", None)
                 and getattr(self.settings, "sportsdataio_base_url", None)
-                and getattr(self.settings, "sportsdataio_world_cup_competition_key", None)
+                and (
+                    getattr(self.settings, "sportsdataio_world_cup_competition_id", None)
+                    or getattr(self.settings, "sportsdataio_world_cup_competition_key", None)
+                )
+                and (
+                    getattr(self.settings, "sportsdataio_world_cup_season_id", None)
+                    or getattr(self.settings, "sportsdataio_world_cup_season", None)
+                )
             ),
             "thesportsdb_worldcup": bool(
                 getattr(self.settings, "thesportsdb_base_url", None)
                 and getattr(self.settings, "thesportsdb_api_key", None)
                 and getattr(self.settings, "thesportsdb_world_cup_league_id", None)
             ),
+            "openfootball_worldcup_json": bool(getattr(self.settings, "openfootball_worldcup_json_url", None)),
+            "statsbomb_open_data": bool(getattr(self.settings, "statsbomb_open_data_base_url", None)),
+            "espn_scoreboard": bool(getattr(self.settings, "espn_scoreboard_url", None)),
+            "open_meteo_weather": bool(getattr(self.settings, "open_meteo_base_url", None)),
+            "gdelt_news": bool(getattr(self.settings, "gdelt_doc_base_url", None)),
+            "fifa_ranking_source": bool(getattr(self.settings, "fifa_ranking_url", None)),
             "humhub_fwc_2026": bool(getattr(self.settings, "humhub_fwc_2026_base_url", None)),
         }
 
@@ -281,5 +340,11 @@ class SourceFusionService:
             "thestatsapi_worldcup": bool(getattr(self.settings, "thestatsapi_enabled", False)),
             "sportsdataio_worldcup": bool(getattr(self.settings, "sportsdataio_enabled", False)),
             "thesportsdb_worldcup": bool(getattr(self.settings, "thesportsdb_enabled", False)),
+            "openfootball_worldcup_json": bool(getattr(self.settings, "openfootball_worldcup_json_enabled", True)),
+            "statsbomb_open_data": bool(getattr(self.settings, "statsbomb_open_data_enabled", True)),
+            "espn_scoreboard": True,
+            "open_meteo_weather": bool(getattr(self.settings, "open_meteo_enabled", False)),
+            "gdelt_news": bool(getattr(self.settings, "gdelt_enabled", False)),
+            "fifa_ranking_source": bool(getattr(self.settings, "fifa_ranking_enabled", False)),
             "humhub_fwc_2026": bool(getattr(self.settings, "humhub_fwc_2026_enabled", False)),
         }
