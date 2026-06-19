@@ -10,6 +10,7 @@ from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 from app.services.tournamental_odds_client import TournamentalOddsClient
 from app.services.tournamental_odds_normalizer import find_market_signal_for_fixture, normalize_tournamental_snapshot
+from app.services.tournamental_wc2026_client import TournamentalWC2026Client
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.model_version)
@@ -189,6 +190,10 @@ def tournamental_odds():
     return TournamentalOddsClient(settings)
 
 
+def tournamental_wc2026():
+    return TournamentalWC2026Client(settings)
+
+
 def normalized_market_snapshot() -> dict | None:
     result = tournamental_odds().snapshot()
     if not result.ok:
@@ -264,6 +269,26 @@ def worldcup_market_team_winner(code: str):
 @app.get("/market/worldcup/team/{code}/group")
 def worldcup_market_team_group(code: str):
     return tournamental_odds().team_group(code)
+
+
+@app.get("/wc2026/health")
+def wc2026_health():
+    return tournamental_wc2026().health()
+
+
+@app.get("/wc2026/version")
+def wc2026_version():
+    return tournamental_wc2026().version()
+
+
+@app.get("/wc2026/upcoming")
+def wc2026_upcoming():
+    return tournamental_wc2026().upcoming()
+
+
+@app.get("/wc2026/match/{match_id}")
+def wc2026_match(match_id: str):
+    return tournamental_wc2026().match(match_id)
 
 
 @app.get("/fixtures", response_model=list[Fixture])
