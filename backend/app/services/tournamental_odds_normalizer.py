@@ -5,6 +5,7 @@ from typing import Any
 
 PROBABILITY_SUM_TOLERANCE = 0.03
 SETTLED_LIKE_THRESHOLD = 0.995
+DRAW_LABEL = "Draw"
 
 
 def normalize_tournamental_snapshot(payload: Any) -> dict[str, Any]:
@@ -72,9 +73,12 @@ def normalize_match_market(market_key: str, outcomes: dict[str, Any]) -> dict[st
     probability_sum = round(sum(normalized_outcomes.values()), 6)
     max_probability = max(normalized_outcomes.values(), default=0.0)
     flags: list[str] = []
+    team_names = [name for name in normalized_outcomes if normalize_name(name) != normalize_name(DRAW_LABEL)]
 
     if len(normalized_outcomes) < 3:
         flags.append("too_few_outcomes")
+    if len(team_names) != 2:
+        flags.append("team_outcome_count_mismatch")
     if probability_sum < 1 - PROBABILITY_SUM_TOLERANCE:
         flags.append("probability_sum_too_low")
     if probability_sum > 1 + PROBABILITY_SUM_TOLERANCE:
@@ -85,12 +89,49 @@ def normalize_match_market(market_key: str, outcomes: dict[str, Any]) -> dict[st
     return {
         "market_key": market_key,
         "match_no": market_key.rsplit(":", 1)[-1],
+        "team_names": team_names,
+        "team_key": "__".join(sorted(normalize_name(name) for name in team_names)) if len(team_names) == 2 else None,
         "outcomes": normalized_outcomes,
         "probability_sum": probability_sum,
         "max_probability": max_probability,
         "quality_flags": flags,
         "is_usable_for_prediction": not flags,
     }
+
+
+def find_market_signal_for_fixture(fixture: Any, normalized_snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    home_name = getattr(getattr(fixture, "home_team", None), "name", None)
+    away_name = getattr(getattr(fixture, "away_team", None), "name", None)
+    if not home_name or not away_name:
+        return None
+    home_key = normalize_name(str(home_name))
+    away_key = normalize_name(str(away_name))
+
+    for market in normalized_snapshot.get("match_markets", []):
+        if not isinstance(market, dict) or not market.get("is_usable_for_prediction"):
+            continue
+        outcome_map = {
+            normalize_name(name): probability
+            for name, probability in market.get("outcomes", {}).items()
+            if isinstance(probability, (int, float))
+        }
+        home_probability = outcome_map.get(home_key)
+        draw_probability = outcome_map.get(normalize_name(DRAW_LABEL))
+        away_probability = outcome_map.get(away_key)
+        if all(isinstance(value, (int, float)) for value in [home_probability, draw_probability, away_probability]):
+            return {
+                "market_signal_available": True,
+                "market_source": "tournamental_odds",
+                "market_key": market.get("market_key"),
+                "market_match_no": market.get("match_no"),
+                "market_home_implied_probability": float(home_probability),
+                "market_draw_implied_probability": float(draw_probability),
+                "market_away_implied_probability": float(away_probability),
+                "market_bookmaker_count": 0,
+                "market_quality_flags": market.get("quality_flags", []),
+                "market_probability_sum": market.get("probability_sum"),
+            }
+    return None
 
 
 def normalize_yes_no_market(market_key: str, outcomes: dict[str, Any], market_type: str) -> dict[str, Any]:
@@ -120,6 +161,10 @@ def numeric_sort_key(value: Any) -> tuple[int, str]:
         return int(text), text
     except ValueError:
         return 10**9, text
+
+
+def normalize_name(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-")
 
 
 def timestamp_ms_to_iso(value: Any) -> str | None:
