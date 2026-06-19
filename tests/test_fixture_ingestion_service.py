@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -9,6 +10,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.services.fixture_ingestion_service import (
+    FixtureIngestionService,
     dedupe_fixtures,
     normalize_api_football_records,
     normalize_espn_scoreboard_records,
@@ -127,6 +129,50 @@ def test_normalize_generic_fixture_records_extracts_fixture() -> None:
     assert len(records) == 1
     assert records[0]["source_event_id"] == "abc"
     assert records[0]["stage"] == "Final"
+
+
+def test_normalize_generic_fixture_records_supports_sportsdataio_names() -> None:
+    payload = {
+        "Games": [
+            {
+                "GameId": 777,
+                "HomeTeamName": "Mexico",
+                "AwayTeamName": "Canada",
+                "DateTime": "2026-06-11T19:00:00Z",
+                "Venue": "Estadio Azteca",
+                "Round": "Group Stage",
+            }
+        ]
+    }
+    records = normalize_generic_fixture_records(payload, source_key="sportsdataio_worldcup")
+    assert len(records) == 1
+    assert records[0]["source_event_id"] == "777"
+    assert records[0]["home_team_name"] == "Mexico"
+    assert records[0]["away_team_name"] == "Canada"
+
+
+def test_sportsdataio_requires_world_cup_ids_when_enabled() -> None:
+    settings = SimpleNamespace(
+        sportsdataio_enabled=True,
+        sportsdataio_api_key="key",
+        sportsdataio_base_url="https://api.sportsdata.io/v4/soccer",
+        sportsdataio_world_cup_competition_id=None,
+        sportsdataio_world_cup_competition_key=None,
+        sportsdataio_world_cup_season_id=None,
+        sportsdataio_world_cup_season=None,
+    )
+    result = FixtureIngestionService(settings).sportsdataio_worldcup()
+    assert result.error == "missing_world_cup_ids"
+    assert result.record_count == 0
+
+
+def test_feature_sources_report_readiness_not_fixture_records() -> None:
+    settings = SimpleNamespace(fifa_ranking_url="https://inside.fifa.com/fifa-world-ranking/men", fifa_ranking_enabled=True)
+    result = FixtureIngestionService(settings).fifa_ranking_source()
+    assert result.source_key == "fifa_ranking_source"
+    assert result.ok is True
+    assert result.error == "feature_source_not_fixture_ingestion"
+    assert result.records == []
 
 
 def test_dedupe_prefers_espn_over_openfootball_for_same_fixture() -> None:
