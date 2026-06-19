@@ -45,8 +45,45 @@ class Settings(BaseSettings):
     football_data_worldcup_competition_code: str = "WC"
     football_data_enabled: bool = True
 
-    tournamental_api_key: str | None = None
-    tournamental_base_url: str | None = None
+    tournamental_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TOURNAMENTAL_API_KEY", "tournamental_api_key"),
+    )
+    tournamental_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TOURNAMENTAL_BASE_URL", "tournamental_base_url"),
+    )
+    tournamental_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("TOURNAMENTAL_ENABLED", "tournamental_enabled"),
+    )
+    tournamental_tournament_id: str = Field(
+        default="fifa-wc-2026",
+        validation_alias=AliasChoices("TOURNAMENTAL_TOURNAMENT_ID", "tournamental_tournament_id"),
+    )
+    tournamental_mode: str = Field(
+        default="bot_arena_benchmark",
+        validation_alias=AliasChoices("TOURNAMENTAL_MODE", "tournamental_mode"),
+    )
+    tournamental_enable_read_only_feeds: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "TOURNAMENTAL_ENABLE_READ_ONLY_FEEDS",
+            "tournamental_enable_read_only_feeds",
+        ),
+    )
+    tournamental_enable_pick_submission: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "TOURNAMENTAL_ENABLE_PICK_SUBMISSION",
+            "tournamental_enable_pick_submission",
+        ),
+    )
+    tournamental_bot_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TOURNAMENTAL_BOT_ID", "tournamental_bot_id"),
+    )
+
     tournamental_odds_base_url: str = "https://odds.tournamental.com"
     tournamental_odds_enabled: bool = False
     tournamental_wc2026_base_url: str = Field(
