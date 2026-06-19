@@ -78,16 +78,48 @@ class Settings(BaseSettings):
     thestatsapi_base_url: str = "https://api.thestatsapi.com/api"
     thestatsapi_key: str | None = None
     thestatsapi_enabled: bool = False
-    thestatsapi_world_cup_competition_id: str | None = None
-    thestatsapi_world_cup_season_id: str | None = None
+    thestatsapi_world_cup_competition_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "THESTATSAPI_WORLD_CUP_COMPETITION_ID",
+            "thestatsapi_world_cup_competition_id",
+        ),
+    )
+    thestatsapi_world_cup_season_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "THESTATSAPI_WORLD_CUP_SEASON_ID",
+            "thestatsapi_world_cup_season_id",
+        ),
+    )
 
-    sportsdataio_base_url: str = "https://api.sportsdata.io/v3/soccer"
+    sportsdataio_base_url: str = Field(
+        default="https://api.sportsdata.io/v4/soccer",
+        validation_alias=AliasChoices(
+            "SPORTSDATAIO_BASE_URL",
+            "sportsdataio_base_url",
+        ),
+    )
     sportsdataio_api_key: str | None = None
     sportsdataio_enabled: bool = False
     sportsdataio_mode: str = "trial_evaluation_only"
     sportsdataio_world_cup_competition_key: str | None = None
+    sportsdataio_world_cup_competition_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SPORTSDATAIO_WORLD_CUP_COMPETITION_ID",
+            "sportsdataio_world_cup_competition_id",
+        ),
+    )
+    sportsdataio_world_cup_season_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SPORTSDATAIO_WORLD_CUP_SEASON_ID",
+            "sportsdataio_world_cup_season_id",
+        ),
+    )
     sportsdataio_world_cup_season: str = "2026"
-    sportsdataio_world_cup_fixtures_path: str = "/scores/json/GamesByCompetition/{competition_key}/{season}"
+    sportsdataio_world_cup_fixtures_path: str = "/scores/json/GamesByCompetition/{competition_id}/{season_id}"
 
     thesportsdb_base_url: str = "https://www.thesportsdb.com/api/v1/json"
     thesportsdb_api_key: str = "123"
@@ -98,10 +130,43 @@ class Settings(BaseSettings):
     humhub_fwc_2026_base_url: str | None = None
     humhub_fwc_2026_enabled: bool = False
 
+    openfootball_worldcup_json_enabled: bool = True
     openfootball_worldcup_json_url: str = "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json"
+    statsbomb_open_data_enabled: bool = True
     statsbomb_open_data_base_url: str = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
     espn_scoreboard_url: str = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
     soccerdata_project_url: str = "https://github.com/probberechts/soccerdata"
+
+    open_meteo_base_url: str = Field(
+        default="https://api.open-meteo.com/v1",
+        validation_alias=AliasChoices("OPEN_METEO_BASE_URL", "open_meteo_base_url"),
+    )
+    open_meteo_archive_base_url: str = Field(
+        default="https://archive-api.open-meteo.com/v1",
+        validation_alias=AliasChoices("OPEN_METEO_ARCHIVE_BASE_URL", "open_meteo_archive_base_url"),
+    )
+    open_meteo_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("OPEN_METEO_ENABLED", "open_meteo_enabled"),
+    )
+
+    gdelt_doc_base_url: str = Field(
+        default="https://api.gdeltproject.org/api/v2/doc/doc",
+        validation_alias=AliasChoices("GDELT_DOC_BASE_URL", "gdelt_doc_base_url"),
+    )
+    gdelt_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GDELT_ENABLED", "gdelt_enabled"),
+    )
+
+    fifa_ranking_url: str = Field(
+        default="https://inside.fifa.com/fifa-world-ranking/men",
+        validation_alias=AliasChoices("FIFA_RANKING_URL", "fifa_ranking_url"),
+    )
+    fifa_ranking_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("FIFA_RANKING_ENABLED", "fifa_ranking_enabled"),
+    )
 
     database_url: str | None = None
     redis_url: str | None = None
