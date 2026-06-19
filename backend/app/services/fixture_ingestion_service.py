@@ -5,8 +5,9 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.services.football_data_client import FootballDataClient
@@ -31,8 +32,16 @@ class FixtureIngestionService:
     def ingest(self) -> dict[str, Any]:
         results = [
             self.football_data_worldcup(),
+            self.api_football_worldcup(),
+            self.thestatsapi_worldcup(),
+            self.worldcup_2026_public(),
+            self.tournamental_wc2026(),
+            self.zafronix_worldcup(),
+            self.sportsdataio_worldcup(),
+            self.thesportsdb_worldcup(),
             self.openfootball_worldcup_json(),
             self.espn_scoreboard(),
+            self.humhub_fwc_2026(),
         ]
         fixtures = dedupe_fixtures(record for result in results for record in result.records)
         return {
@@ -40,10 +49,16 @@ class FixtureIngestionService:
             "fixture_count": len(fixtures),
             "sources": [asdict(result) | {"records": []} for result in results],
             "fixtures": fixtures,
-            "usage_note": "Ingested fixtures are normalized snapshots. They should be cross-checked before replacing demo fixtures as the default site source.",
+            "usage_note": (
+                "Ingested fixtures are normalized snapshots. They are cache inputs only and never trigger real-money betting, "
+                "recommended bets, stake sizing, or live betting."
+            ),
         }
 
     def football_data_worldcup(self) -> SourceAdapterResult:
+        if not bool(getattr(self.settings, "football_data_enabled", True)):
+            configured = bool(getattr(self.settings, "football_data_token", None))
+            return SourceAdapterResult("football_data", configured, False, None, "disabled", 0, [])
         result = FootballDataClient(self.settings, timeout_seconds=self.timeout_seconds).worldcup_matches()
         return SourceAdapterResult(
             source_key=result.source_key,
@@ -53,6 +68,147 @@ class FixtureIngestionService:
             error=result.error,
             record_count=result.record_count,
             records=result.records,
+        )
+
+    def api_football_worldcup(self) -> SourceAdapterResult:
+        source_key = "api_football"
+        if not bool(getattr(self.settings, "api_football_enabled", True)):
+            configured = bool(getattr(self.settings, "api_football_key", None))
+            return SourceAdapterResult(source_key, configured, False, None, "disabled", 0, [])
+        key = getattr(self.settings, "api_football_key", None)
+        base_url = getattr(self.settings, "api_football_base_url", None)
+        if not key:
+            return SourceAdapterResult(source_key, False, False, None, "missing_credentials", 0, [])
+        url = build_url(
+            base_url,
+            "/fixtures",
+            {
+                "league": str(getattr(self.settings, "api_football_worldcup_league_id", 1)),
+                "season": str(getattr(self.settings, "api_football_worldcup_season", 2026)),
+            },
+        )
+        return self._json_adapter(
+            source_key=source_key,
+            url=url,
+            normalizer=normalize_api_football_records,
+            headers={"x-apisports-key": key},
+            configured=True,
+        )
+
+    def thestatsapi_worldcup(self) -> SourceAdapterResult:
+        source_key = "thestatsapi_worldcup"
+        if not bool(getattr(self.settings, "thestatsapi_enabled", False)):
+            configured = bool(getattr(self.settings, "thestatsapi_key", None))
+            return SourceAdapterResult(source_key, configured, False, None, "disabled", 0, [])
+        key = getattr(self.settings, "thestatsapi_key", None)
+        competition_id = getattr(self.settings, "thestatsapi_world_cup_competition_id", None)
+        season_id = getattr(self.settings, "thestatsapi_world_cup_season_id", None)
+        if not key or not competition_id or not season_id:
+            return SourceAdapterResult(source_key, False, False, None, "missing_credentials_or_ids", 0, [])
+        url = build_url(
+            getattr(self.settings, "thestatsapi_base_url", None),
+            "/football/matches",
+            {
+                "competition_id": str(competition_id),
+                "season_id": str(season_id),
+                "page": "1",
+                "per_page": "100",
+            },
+        )
+        return self._json_adapter(
+            source_key=source_key,
+            url=url,
+            normalizer=normalize_generic_fixture_records,
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            configured=True,
+        )
+
+    def worldcup_2026_public(self) -> SourceAdapterResult:
+        source_key = "worldcup_2026_api"
+        base_url = getattr(self.settings, "worldcup_2026_public_base_url", None)
+        if not bool(getattr(self.settings, "worldcup_2026_api_enabled", False)):
+            return SourceAdapterResult(source_key, bool(base_url), False, None, "disabled", 0, [])
+        return self._json_adapter(
+            source_key=source_key,
+            url=build_url(base_url, "/get/games"),
+            normalizer=normalize_generic_fixture_records,
+            configured=bool(base_url),
+        )
+
+    def tournamental_wc2026(self) -> SourceAdapterResult:
+        source_key = "tournamental_wc2026"
+        base_url = getattr(self.settings, "tournamental_wc2026_base_url", None)
+        if not bool(getattr(self.settings, "tournamental_wc2026_enabled", True)):
+            return SourceAdapterResult(source_key, bool(base_url), False, None, "disabled", 0, [])
+        return self._json_adapter(
+            source_key=source_key,
+            url=build_url(base_url, "/v1/upcoming"),
+            normalizer=normalize_generic_fixture_records,
+            configured=bool(base_url),
+        )
+
+    def zafronix_worldcup(self) -> SourceAdapterResult:
+        source_key = "zafronix_worldcup"
+        if not bool(getattr(self.settings, "zafronix_worldcup_enabled", False)):
+            configured = bool(getattr(self.settings, "zafronix_worldcup_key", None) and getattr(self.settings, "zafronix_worldcup_base_url", None))
+            return SourceAdapterResult(source_key, configured, False, None, "disabled", 0, [])
+        key = getattr(self.settings, "zafronix_worldcup_key", None)
+        if not key:
+            return SourceAdapterResult(source_key, False, False, None, "missing_credentials", 0, [])
+        url = build_url(getattr(self.settings, "zafronix_worldcup_base_url", None), "/matches", {"year": "2026"})
+        return self._json_adapter(
+            source_key=source_key,
+            url=url,
+            normalizer=normalize_generic_fixture_records,
+            headers={"X-API-Key": key, "Accept": "application/json"},
+            configured=True,
+        )
+
+    def sportsdataio_worldcup(self) -> SourceAdapterResult:
+        source_key = "sportsdataio_worldcup"
+        if not bool(getattr(self.settings, "sportsdataio_enabled", False)):
+            configured = bool(getattr(self.settings, "sportsdataio_api_key", None))
+            return SourceAdapterResult(source_key, configured, False, None, "disabled", 0, [])
+        key = getattr(self.settings, "sportsdataio_api_key", None)
+        competition_key = getattr(self.settings, "sportsdataio_world_cup_competition_key", None)
+        if not key:
+            return SourceAdapterResult(source_key, False, False, None, "missing_credentials", 0, [])
+        if not competition_key:
+            return SourceAdapterResult(source_key, True, False, None, "missing_world_cup_competition_key", 0, [])
+        path_template = getattr(self.settings, "sportsdataio_world_cup_fixtures_path", "/scores/json/GamesByCompetition/{competition_key}/{season}")
+        path = path_template.format(
+            competition_key=competition_key,
+            season=getattr(self.settings, "sportsdataio_world_cup_season", "2026"),
+        )
+        return self._json_adapter(
+            source_key=source_key,
+            url=build_url(getattr(self.settings, "sportsdataio_base_url", None), path),
+            normalizer=normalize_generic_fixture_records,
+            headers={"Ocp-Apim-Subscription-Key": key, "Accept": "application/json"},
+            configured=True,
+        )
+
+    def thesportsdb_worldcup(self) -> SourceAdapterResult:
+        source_key = "thesportsdb_worldcup"
+        api_key = getattr(self.settings, "thesportsdb_api_key", None)
+        league_id = getattr(self.settings, "thesportsdb_world_cup_league_id", None)
+        if not bool(getattr(self.settings, "thesportsdb_enabled", False)):
+            return SourceAdapterResult(source_key, bool(api_key and league_id), False, None, "disabled", 0, [])
+        if not api_key or not league_id:
+            return SourceAdapterResult(source_key, False, False, None, "missing_api_key_or_league_id", 0, [])
+        url = build_url(
+            getattr(self.settings, "thesportsdb_base_url", None),
+            f"/{api_key}/eventsseason.php",
+            {
+                "id": str(league_id),
+                "s": str(getattr(self.settings, "thesportsdb_world_cup_season", "2026")),
+            },
+        )
+        return self._json_adapter(
+            source_key=source_key,
+            url=url,
+            normalizer=normalize_thesportsdb_records,
+            configured=True,
         )
 
     def openfootball_worldcup_json(self) -> SourceAdapterResult:
@@ -71,23 +227,45 @@ class FixtureIngestionService:
             normalizer=normalize_espn_scoreboard_records,
         )
 
-    def _json_adapter(self, source_key: str, url: str | None, normalizer) -> SourceAdapterResult:
+    def humhub_fwc_2026(self) -> SourceAdapterResult:
+        source_key = "humhub_fwc_2026"
+        base_url = getattr(self.settings, "humhub_fwc_2026_base_url", None)
+        if not bool(getattr(self.settings, "humhub_fwc_2026_enabled", False)):
+            return SourceAdapterResult(source_key, bool(base_url), False, None, "disabled", 0, [])
+        return self._json_adapter(
+            source_key=source_key,
+            url=build_url(base_url, "/matches"),
+            normalizer=normalize_generic_fixture_records,
+            configured=bool(base_url),
+        )
+
+    def _json_adapter(
+        self,
+        source_key: str,
+        url: str | None,
+        normalizer: Callable[..., list[dict[str, Any]]],
+        headers: dict[str, str] | None = None,
+        configured: bool | None = None,
+    ) -> SourceAdapterResult:
+        is_configured = bool(url) if configured is None else configured
         if not url:
-            return SourceAdapterResult(source_key, False, False, None, "missing_url", 0, [])
-        request = Request(url, headers={"User-Agent": "football-prediction-fixture-ingestion/1.0"})
+            return SourceAdapterResult(source_key, is_configured, False, None, "missing_url", 0, [])
+        request_headers = {"User-Agent": "football-prediction-fixture-ingestion/1.0", "Accept": "application/json"}
+        request_headers.update(headers or {})
+        request = Request(url, headers=request_headers)
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 records = normalizer(payload, source_key=source_key)
-                return SourceAdapterResult(source_key, True, True, response.status, None, len(records), records)
+                return SourceAdapterResult(source_key, is_configured, True, response.status, None, len(records), records)
         except HTTPError as exc:
-            return SourceAdapterResult(source_key, True, False, exc.code, f"http_{exc.code}", 0, [])
+            return SourceAdapterResult(source_key, is_configured, False, exc.code, normalize_http_error(exc.code), 0, [])
         except URLError as exc:
-            return SourceAdapterResult(source_key, True, False, None, str(exc.reason), 0, [])
+            return SourceAdapterResult(source_key, is_configured, False, None, str(exc.reason), 0, [])
         except TimeoutError:
-            return SourceAdapterResult(source_key, True, False, None, "timeout", 0, [])
+            return SourceAdapterResult(source_key, is_configured, False, None, "timeout", 0, [])
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            return SourceAdapterResult(source_key, True, False, None, f"parse_error: {exc}", 0, [])
+            return SourceAdapterResult(source_key, is_configured, False, None, f"parse_error: {exc}", 0, [])
 
 
 def normalize_openfootball_records(payload: Any, source_key: str) -> list[dict[str, Any]]:
@@ -151,6 +329,114 @@ def normalize_espn_scoreboard_records(payload: Any, source_key: str) -> list[dic
     return records
 
 
+def normalize_api_football_records(payload: Any, source_key: str) -> list[dict[str, Any]]:
+    items = payload.get("response", []) if isinstance(payload, dict) else payload
+    records: list[dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        fixture = item.get("fixture", {}) if isinstance(item.get("fixture"), dict) else {}
+        teams = item.get("teams", {}) if isinstance(item.get("teams"), dict) else {}
+        goals = item.get("goals", {}) if isinstance(item.get("goals"), dict) else {}
+        league = item.get("league", {}) if isinstance(item.get("league"), dict) else {}
+        home = first_text(teams.get("home", {}), ["name", "displayName", "shortName"])
+        away = first_text(teams.get("away", {}), ["name", "displayName", "shortName"])
+        if not valid_team_pair(home, away):
+            continue
+        status_payload = fixture.get("status", {}) if isinstance(fixture.get("status"), dict) else {}
+        elapsed = safe_int(status_payload.get("elapsed"))
+        home_score = safe_int(goals.get("home"))
+        away_score = safe_int(goals.get("away"))
+        status_text = first_text(status_payload, ["short", "long"]) or "scheduled"
+        records.append(make_fixture_record(
+            source_key=source_key,
+            source_event_id=fixture.get("id"),
+            home_team=home,
+            away_team=away,
+            kickoff_time=fixture.get("date"),
+            venue=first_text(fixture.get("venue", {}) if isinstance(fixture.get("venue"), dict) else {}, ["name"]),
+            stage=first_text(league, ["round", "name"]) or "world_cup",
+            status=normalize_status(status_text, home_score, away_score, elapsed),
+            home_score=home_score,
+            away_score=away_score,
+        ))
+    return records
+
+
+def normalize_thesportsdb_records(payload: Any, source_key: str) -> list[dict[str, Any]]:
+    events = []
+    if isinstance(payload, dict):
+        events = payload.get("events") or payload.get("event") or []
+    records: list[dict[str, Any]] = []
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        home = first_text(event, ["strHomeTeam", "home_team", "homeTeam"])
+        away = first_text(event, ["strAwayTeam", "away_team", "awayTeam"])
+        if not valid_team_pair(home, away):
+            continue
+        date = first_text(event, ["strTimestamp", "dateEvent", "dateEventLocal"])
+        time = first_text(event, ["strTime", "strTimeLocal"])
+        kickoff = date
+        if date and time and "T" not in date:
+            kickoff = f"{date}T{time}"
+        home_score = first_int(event, ["intHomeScore", "home_score", "homeScore"])
+        away_score = first_int(event, ["intAwayScore", "away_score", "awayScore"])
+        records.append(make_fixture_record(
+            source_key=source_key,
+            source_event_id=first_text(event, ["idEvent", "id", "event_id"]),
+            home_team=home,
+            away_team=away,
+            kickoff_time=kickoff,
+            venue=first_text(event, ["strVenue", "venue", "stadium"]),
+            stage=first_text(event, ["intRound", "strRound", "strGroup", "stage"]) or "world_cup",
+            status=normalize_status(first_text(event, ["strStatus", "status"]), home_score, away_score),
+            home_score=home_score,
+            away_score=away_score,
+        ))
+    return records
+
+
+def normalize_generic_fixture_records(payload: Any, source_key: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in iter_dicts(payload):
+        home = first_text(item, [
+            "home_team", "homeTeam", "home", "team1", "team_1", "home_team_name",
+            "homeName", "localteam", "localTeam", "team_home",
+        ])
+        away = first_text(item, [
+            "away_team", "awayTeam", "away", "team2", "team_2", "away_team_name",
+            "awayName", "visitorteam", "visitorTeam", "team_away",
+        ])
+        if not valid_team_pair(home, away):
+            continue
+        kickoff = first_text(item, [
+            "kickoff_time", "kickoff", "datetime", "date", "time", "utcDate",
+            "startTime", "start_time", "match_date", "game_date", "dateTime", "timestamp",
+        ])
+        home_score = first_int(item, [
+            "home_score", "homeScore", "home_goals", "homeGoals", "goals_home",
+            "score1", "score_1", "goals1", "homeTeamScore", "HomeTeamScore",
+        ])
+        away_score = first_int(item, [
+            "away_score", "awayScore", "away_goals", "awayGoals", "goals_away",
+            "score2", "score_2", "goals2", "awayTeamScore", "AwayTeamScore",
+        ])
+        records.append(make_fixture_record(
+            source_key=source_key,
+            source_event_id=first_text(item, ["id", "key", "num", "match_id", "matchId", "event_id", "eventId", "game_id", "GameId"]),
+            home_team=home,
+            away_team=away,
+            kickoff_time=kickoff,
+            venue=first_text(item, ["venue", "stadium", "ground", "location", "Venue", "Stadium"]),
+            stage=first_text(item, ["stage", "round", "group", "name", "phase", "Round", "Group"]) or "world_cup",
+            status=normalize_status(first_text(item, ["status", "state", "matchStatus", "gameStatus", "Status"]), home_score, away_score),
+            home_score=home_score,
+            away_score=away_score,
+        ))
+    return records
+
+
 def make_fixture_record(
     source_key: str,
     source_event_id: Any,
@@ -191,8 +477,58 @@ def dedupe_fixtures(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def source_priority(source_key: Any) -> int:
-    priorities = {"football_data": 0, "espn_scoreboard": 1, "openfootball_worldcup_json": 2}
+    priorities = {
+        "football_data": 0,
+        "api_football": 1,
+        "thestatsapi_worldcup": 2,
+        "worldcup_2026_api": 3,
+        "tournamental_wc2026": 4,
+        "zafronix_worldcup": 5,
+        "sportsdataio_worldcup": 6,
+        "espn_scoreboard": 7,
+        "openfootball_worldcup_json": 8,
+        "thesportsdb_worldcup": 9,
+        "humhub_fwc_2026": 10,
+    }
     return priorities.get(str(source_key), 99)
+
+
+def build_url(base_url: str | None, path: str, params: dict[str, str] | None = None) -> str | None:
+    if not base_url:
+        return None
+    base = base_url.rstrip("/")
+    safe_path = path if path.startswith("/") else f"/{path}"
+    query = f"?{urlencode(params)}" if params else ""
+    return f"{base}{safe_path}{query}"
+
+
+def normalize_http_error(status_code: int) -> str:
+    if status_code in {401, 403}:
+        return "unauthorized_or_forbidden"
+    if status_code == 429:
+        return "rate_limited"
+    if status_code >= 500:
+        return "upstream_error"
+    if status_code == 404:
+        return "not_found"
+    return f"http_{status_code}"
+
+
+def normalize_status(status: str | None, home_score: int | None, away_score: int | None, elapsed: int | None = None) -> str:
+    raw = (status or "").strip().lower()
+    if home_score is not None and away_score is not None and raw in {"ft", "aet", "pen", "finished", "match finished", "final", "full time"}:
+        return "finished"
+    if raw in {"ft", "aet", "pen", "finished", "match finished", "final", "full time"}:
+        return "finished"
+    if raw in {"ns", "tbd", "scheduled", "not started", "pre", "preview"}:
+        return "scheduled"
+    if raw in {"1h", "2h", "ht", "et", "bt", "live", "in progress", "in_play"} or elapsed:
+        return "in_progress"
+    if raw in {"pst", "postponed"}:
+        return "postponed"
+    if raw in {"canc", "cancelled", "canceled"}:
+        return "cancelled"
+    return raw or ("finished" if home_score is not None and away_score is not None else "scheduled")
 
 
 def iter_dicts(value: Any):
@@ -224,7 +560,10 @@ def extract_text(value: Any) -> str | None:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, dict):
-        return first_text(value, ["displayName", "name", "shortName", "shortDisplayName", "country", "code"])
+        return first_text(value, [
+            "displayName", "name", "shortName", "shortDisplayName", "country", "code",
+            "Name", "TeamName", "teamName", "fullName",
+        ])
     return None
 
 
