@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,6 +25,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FIXTURE_CACHE_PATHS = [
+    ROOT_DIR / "data" / "cache" / "fixtures_latest.json",
+    ROOT_DIR / "data" / "raw" / "fixtures_latest.json",
+    ROOT_DIR / "report" / "fixtures_latest.json",
+]
+FIXTURE_SOURCE_DESCRIPTION = "Fixture source: auto, demo, cache, or ingestion."
 
 
 def team(
@@ -147,12 +158,57 @@ def fixture_ingestion():
     return FixtureIngestionService(settings).ingest()
 
 
-def ingested_fixtures() -> list[Fixture]:
-    payload = fixture_ingestion()
+def cached_fixture_records() -> list[dict]:
+    """Read pre-generated fixture snapshots without calling external APIs.
+
+    Accepted payload formats:
+    - {"fixtures": [...]} from ingestion/report scripts
+    - [...] as a raw fixture list
+    """
+
+    for path in FIXTURE_CACHE_PATHS:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if isinstance(payload, dict):
+            records = payload.get("fixtures", [])
+        elif isinstance(payload, list):
+            records = payload
+        else:
+            records = []
+
+        if isinstance(records, list):
+            return [record for record in records if isinstance(record, dict)]
+
+    return []
+
+
+def record_team_name(record: dict, flat_key: str, nested_key: str) -> str | None:
+    flat_value = record.get(flat_key)
+    if isinstance(flat_value, str) and flat_value.strip():
+        return flat_value.strip()
+
+    nested_value = record.get(nested_key)
+    if isinstance(nested_value, str) and nested_value.strip():
+        return nested_value.strip()
+    if isinstance(nested_value, dict):
+        for key in ("name", "country", "id"):
+            value = nested_value.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    return None
+
+
+def fixture_records_to_fixtures(records: list[dict]) -> list[Fixture]:
     fixtures: list[Fixture] = []
-    for record in payload.get("fixtures", []):
-        home_name = record.get("home_team_name")
-        away_name = record.get("away_team_name")
+    for record in records:
+        home_name = record_team_name(record, "home_team_name", "home_team")
+        away_name = record_team_name(record, "away_team_name", "away_team")
         if not home_name or not away_name:
             continue
         fixtures.append(
@@ -171,15 +227,26 @@ def ingested_fixtures() -> list[Fixture]:
     return fixtures
 
 
+def cached_fixtures() -> list[Fixture]:
+    return fixture_records_to_fixtures(cached_fixture_records())
+
+
+def ingested_fixtures() -> list[Fixture]:
+    payload = fixture_ingestion()
+    return fixture_records_to_fixtures(payload.get("fixtures", []))
+
+
 def fixtures_by_source(source: str = "auto") -> list[Fixture]:
     if source == "demo":
         return demo_fixtures()
+    if source == "cache":
+        return cached_fixtures()
     if source == "ingestion":
         return ingested_fixtures()
     if source == "auto":
-        ingested = ingested_fixtures()
-        return ingested or demo_fixtures()
-    raise HTTPException(status_code=400, detail="source must be one of: auto, demo, ingestion")
+        cached = cached_fixtures()
+        return cached or demo_fixtures()
+    raise HTTPException(status_code=400, detail="source must be one of: auto, demo, cache, ingestion")
 
 
 def match_feature_rows(source: str = "auto"):
@@ -228,7 +295,7 @@ def model_features():
 
 @app.get("/model/feature-table")
 def model_feature_table(
-    source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
 ):
     return match_feature_rows(source=source)
 
@@ -292,12 +359,12 @@ def wc2026_match(match_id: str):
 
 
 @app.get("/fixtures", response_model=list[Fixture])
-def list_fixtures(source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion.")) -> list[Fixture]:
+def list_fixtures(source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION)) -> list[Fixture]:
     return fixtures_by_source(source)
 
 
 @app.get("/fixtures/{fixture_id}", response_model=Fixture)
-def get_fixture(fixture_id: str, source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion.")) -> Fixture:
+def get_fixture(fixture_id: str, source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION)) -> Fixture:
     for fixture in fixtures_by_source(source):
         if fixture.id == fixture_id:
             return fixture
@@ -307,7 +374,7 @@ def get_fixture(fixture_id: str, source: str = Query(default="auto", description
 @app.get("/predictions/{fixture_id}")
 def get_prediction(
     fixture_id: str,
-    source: str = Query(default="auto", description="Fixture source: auto, demo, or ingestion."),
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
 ):
     fixture = get_fixture(fixture_id, source=source)
     if fixture.status.lower() in {"finished", "final", "full_time"}:
