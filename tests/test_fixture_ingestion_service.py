@@ -175,6 +175,39 @@ def test_feature_sources_report_readiness_not_fixture_records() -> None:
     assert result.records == []
 
 
+def test_tournamental_bot_arena_missing_credentials_does_not_crash() -> None:
+    settings = SimpleNamespace(
+        tournamental_enabled=True,
+        tournamental_enable_read_only_feeds=True,
+        tournamental_api_key=None,
+        tournamental_base_url="https://play.tournamental.com",
+        tournamental_tournament_id="fifa-wc-2026",
+        tournamental_enable_pick_submission=False,
+    )
+    result = FixtureIngestionService(settings).tournamental_bot_arena()
+    assert result.source_key == "tournamental_bot_arena"
+    assert result.ok is False
+    assert result.error == "missing_credentials"
+    assert result.records == []
+
+
+def test_tournamental_bot_arena_is_read_only_and_not_fixture_ingestion() -> None:
+    settings = SimpleNamespace(
+        tournamental_enabled=True,
+        tournamental_enable_read_only_feeds=True,
+        tournamental_api_key="tnm_test",
+        tournamental_base_url="https://play.tournamental.com",
+        tournamental_tournament_id="fifa-wc-2026",
+        tournamental_enable_pick_submission=False,
+    )
+    result = FixtureIngestionService(settings).tournamental_bot_arena()
+    assert result.source_key == "tournamental_bot_arena"
+    assert result.ok is True
+    assert result.error == "read_only_benchmark_not_fixture_ingestion"
+    assert result.record_count == 0
+    assert result.records == []
+
+
 def test_dedupe_prefers_espn_over_openfootball_for_same_fixture() -> None:
     openfootball = normalize_openfootball_records({"matches": [{"date": "2026-06-11", "team1": "Mexico", "team2": "South Africa"}]}, "openfootball_worldcup_json")
     espn = normalize_espn_scoreboard_records({
