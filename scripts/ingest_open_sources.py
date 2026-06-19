@@ -51,6 +51,30 @@ def url_with_query(base_url: str | None, path: str, params: dict[str, str] | Non
     return f"{base_url.rstrip('/')}{safe_path}{query}"
 
 
+def sportsdataio_fixture_path(settings) -> str:
+    competition_id = (
+        getattr(settings, "sportsdataio_world_cup_competition_id", None)
+        or getattr(settings, "sportsdataio_world_cup_competition_key", None)
+        or "missing_competition_id"
+    )
+    season_id = (
+        getattr(settings, "sportsdataio_world_cup_season_id", None)
+        or getattr(settings, "sportsdataio_world_cup_season", None)
+        or "missing_season_id"
+    )
+    template = getattr(
+        settings,
+        "sportsdataio_world_cup_fixtures_path",
+        "/scores/json/GamesByCompetition/{competition_id}/{season_id}",
+    )
+    return template.format(
+        competition_key=competition_id,
+        competition_id=competition_id,
+        season=season_id,
+        season_id=season_id,
+    )
+
+
 def endpoint_for(source_key: str, settings) -> str | None:
     mapping = {
         "football_data": settings.football_data_base_url,
@@ -72,26 +96,41 @@ def endpoint_for(source_key: str, settings) -> str | None:
                 "per_page": "100",
             },
         ),
+        "sportsdataio_worldcup": url_with_query(settings.sportsdataio_base_url, sportsdataio_fixture_path(settings)),
+        "fifa_ranking_source": settings.fifa_ranking_url,
         "worldcup_2026_api": url_with_query(settings.worldcup_2026_public_base_url, "/get/games"),
         "tournamental_wc2026": url_with_query(settings.tournamental_wc2026_base_url, "/v1/upcoming"),
         "zafronix_worldcup": url_with_query(settings.zafronix_worldcup_base_url, "/matches", {"year": "2026"}),
-        "sportsdataio_worldcup": url_with_query(
-            settings.sportsdataio_base_url,
-            settings.sportsdataio_world_cup_fixtures_path.format(
-                competition_key=settings.sportsdataio_world_cup_competition_key or "missing_competition_key",
-                season=settings.sportsdataio_world_cup_season,
-            ),
-        ),
         "thesportsdb_worldcup": url_with_query(
             settings.thesportsdb_base_url,
             f"/{settings.thesportsdb_api_key}/eventsseason.php",
             {"id": settings.thesportsdb_world_cup_league_id, "s": settings.thesportsdb_world_cup_season},
         ),
+        "statsbomb_open_data": url_with_query(settings.statsbomb_open_data_base_url, "/competitions.json"),
+        "open_meteo_weather": url_with_query(
+            settings.open_meteo_base_url,
+            "/forecast",
+            {
+                "latitude": "19.4326",
+                "longitude": "-99.1332",
+                "hourly": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m",
+                "timezone": "auto",
+            },
+        ),
+        "gdelt_news": url_with_query(
+            settings.gdelt_doc_base_url,
+            "",
+            {
+                "query": '"World Cup 2026"',
+                "mode": "ArtList",
+                "format": "json",
+                "maxrecords": "10",
+            },
+        ),
         "openfootball_worldcup_json": settings.openfootball_worldcup_json_url,
         "espn_scoreboard": settings.espn_scoreboard_url,
         "humhub_fwc_2026": url_with_query(settings.humhub_fwc_2026_base_url, "/matches"),
         "tournamental_odds": settings.tournamental_odds_base_url,
-        "statsbomb_open_data": settings.statsbomb_open_data_base_url,
         "openfootball_worldcup_text": "https://raw.githubusercontent.com/openfootball/worldcup/master/2026/worldcup.txt",
         "soccerdata_package": settings.soccerdata_project_url,
         "github_football_scrapers": "https://github.com/search?q=football+prediction+scraper&type=repositories",
@@ -110,7 +149,15 @@ def main() -> int:
 
     source_rows = []
     for source in registry:
-        probe = probe_url(endpoint_for(source.key, settings)) if not source.requires_key else {"configured": source.configured, "reachable": None, "status_code": None, "error": "requires_key" if not source.configured else "key_source_not_probed"}
+        if source.requires_key:
+            probe = {
+                "configured": source.configured,
+                "reachable": None,
+                "status_code": None,
+                "error": "requires_key" if not source.configured else "key_source_not_probed",
+            }
+        else:
+            probe = probe_url(endpoint_for(source.key, settings))
         source_rows.append({
             "key": source.key,
             "name": source.name,
