@@ -45,6 +45,7 @@ class FixtureIngestionService:
             self.fifa_ranking_source(),
             self.open_meteo_weather(),
             self.gdelt_news(),
+            self.tournamental_bot_arena(),
             self.statsbomb_open_data(),
         ]
         fixtures = dedupe_fixtures(record for result in results for record in result.records)
@@ -54,9 +55,9 @@ class FixtureIngestionService:
             "sources": [asdict(result) | {"records": []} for result in results],
             "fixtures": fixtures,
             "usage_note": (
-                "Ingested fixtures are normalized snapshots. Weather, ranking, news, and offline training sources are "
-                "reported as feature-source readiness only; they do not create fixtures. This pipeline never triggers "
-                "real-money betting, recommended bets, stake sizing, or live betting."
+                "Ingested fixtures are normalized snapshots. Weather, ranking, news, Tournamental Bot Arena, "
+                "and offline training sources are reported as feature or benchmark readiness only; they do not create fixtures. "
+                "This pipeline never triggers real-money betting, recommended bets, stake sizing, pick submission, or live betting."
             ),
         }
 
@@ -282,6 +283,26 @@ class FixtureIngestionService:
             configured=bool(getattr(self.settings, "gdelt_doc_base_url", None)),
             enabled=bool(getattr(self.settings, "gdelt_enabled", False)),
         )
+
+    def tournamental_bot_arena(self) -> SourceAdapterResult:
+        source_key = "tournamental_bot_arena"
+        base_url = getattr(self.settings, "tournamental_base_url", None)
+        api_key = getattr(self.settings, "tournamental_api_key", None)
+        tournament_id = getattr(self.settings, "tournamental_tournament_id", None)
+        configured = bool(base_url and api_key and tournament_id)
+        if not bool(getattr(self.settings, "tournamental_enabled", False)):
+            return SourceAdapterResult(source_key, configured, False, None, "disabled", 0, [])
+        if not bool(getattr(self.settings, "tournamental_enable_read_only_feeds", True)):
+            return SourceAdapterResult(source_key, configured, False, None, "read_only_feeds_disabled", 0, [])
+        if not api_key:
+            return SourceAdapterResult(source_key, False, False, None, "missing_credentials", 0, [])
+        if not base_url:
+            return SourceAdapterResult(source_key, False, False, None, "missing_url", 0, [])
+        if not tournament_id:
+            return SourceAdapterResult(source_key, False, False, None, "missing_tournament_id", 0, [])
+        if bool(getattr(self.settings, "tournamental_enable_pick_submission", False)):
+            return SourceAdapterResult(source_key, True, True, None, "read_only_ready_pick_submission_not_used_by_ingestion", 0, [])
+        return SourceAdapterResult(source_key, True, True, None, "read_only_benchmark_not_fixture_ingestion", 0, [])
 
     def statsbomb_open_data(self) -> SourceAdapterResult:
         return self._feature_source_result(
