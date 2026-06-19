@@ -46,13 +46,13 @@ class Settings(BaseSettings):
     football_data_enabled: bool = True
 
     tournamental_api_key: str | None = None
+    tournamental_base_url: str | None = None
     tournamental_odds_base_url: str = "https://odds.tournamental.com"
     tournamental_odds_enabled: bool = False
     tournamental_wc2026_base_url: str = Field(
         default="https://wc2026.tournamental.com",
         validation_alias=AliasChoices(
             "TOURNAMENTAL_WC2026_BASE_URL",
-            "TOURNAMENTAL_BASE_URL",
             "tournamental_wc2026_base_url",
         ),
     )
