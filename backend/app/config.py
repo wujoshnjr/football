@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     football_data_worldcup_competition_code: str = "WC"
 
     tournamental_odds_base_url: str = "https://odds.tournamental.com"
+    tournamental_wc2026_base_url: str = "https://wc2026.tournamental.com"
 
     worldcup_2026_public_base_url: str | None = None
     humhub_fwc_2026_base_url: str | None = None
