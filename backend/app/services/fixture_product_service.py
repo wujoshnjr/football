@@ -173,6 +173,7 @@ def normalize_product_fixture(record: dict[str, Any], source_used: str, generate
     fixture_id = str(record.get("fixture_id") or record.get("id") or f"{home}-{away}-{record.get('kickoff_time') or 'unknown'}")
     last_updated_at = record.get("last_updated_at") or record.get("updated_at") or record.get("checked_at") or generated_at
     finalized_at = record.get("finalized_at") or (last_updated_at if status == "completed" else None)
+    provenance = source_provenance(record, source_used, generated_at)
 
     payload = {
         "id": fixture_id,
@@ -189,8 +190,8 @@ def normalize_product_fixture(record: dict[str, Any], source_used: str, generate
         "winner": winner(home, away, home_score, away_score, status),
         "result": result_label(home, away, home_score, away_score, status),
         "finalized_at": finalized_at,
-        "source_provenance": source_provenance(record, source_used, generated_at),
-        "source_keys": [item.get("source_key") for item in source_provenance(record, source_used, generated_at) if item.get("source_key")],
+        "source_provenance": provenance,
+        "source_keys": [item.get("source_key") for item in provenance if item.get("source_key")],
         "last_updated_at": last_updated_at,
     }
     return payload
@@ -210,6 +211,8 @@ def data_completeness_report(
     source_used: str,
     today: date,
     tz: str,
+    cache_exists: bool = False,
+    cache_path: str | None = None,
 ) -> dict[str, Any]:
     tomorrow = today + timedelta(days=1)
     completed_count = sum(1 for fixture in fixtures if fixture.get("status") == "completed")
@@ -220,6 +223,8 @@ def data_completeness_report(
     missing_reason = None
     if source_used in {"demo", "demo_fallback"}:
         missing_reason = "demo_fallback_in_use"
+    elif not cache_exists and source_used in {"cache", "cache_missing", "demo_fallback"}:
+        missing_reason = "fixture_cache_missing_or_empty"
     elif fixture_count == 0:
         missing_reason = "fixture_cache_missing_or_empty"
     elif fixture_count < MINIMUM_WORLD_CUP_FIXTURE_COUNT:
@@ -227,8 +232,10 @@ def data_completeness_report(
     elif fixture_count < EXPECTED_WORLD_CUP_FIXTURE_COUNT:
         missing_reason = f"fixture_count_below_expected_{EXPECTED_WORLD_CUP_FIXTURE_COUNT}"
 
-    is_complete = missing_reason is None and fixture_count >= EXPECTED_WORLD_CUP_FIXTURE_COUNT
+    is_complete = bool(cache_exists and missing_reason is None and fixture_count >= EXPECTED_WORLD_CUP_FIXTURE_COUNT)
     return {
+        "cache_exists": cache_exists,
+        "cache_path": cache_path,
         "fixture_count": fixture_count,
         "completed_count": completed_count,
         "tomorrow_count": tomorrow_count,
@@ -285,6 +292,8 @@ def build_fixture_api_payload(
     tz: str = DEFAULT_FIXTURE_TIMEZONE,
     limit: int | None = None,
     warnings: list[str] | None = None,
+    cache_exists: bool = False,
+    cache_path: str | None = None,
 ) -> dict[str, Any]:
     fixtures = normalize_product_fixtures(records, source_used=source_used, generated_at=generated_at)
     filtered = filter_product_fixtures(
@@ -296,8 +305,17 @@ def build_fixture_api_payload(
         tz=tz,
         limit=limit,
     )
-    completeness = data_completeness_report(fixtures, source_used=source_used, today=today, tz=tz)
+    completeness = data_completeness_report(
+        fixtures,
+        source_used=source_used,
+        today=today,
+        tz=tz,
+        cache_exists=cache_exists,
+        cache_path=cache_path,
+    )
     payload_warnings = list(warnings or [])
+    if not cache_exists and source_used in {"cache_missing", "demo_fallback"}:
+        payload_warnings.append("Fixture cache is missing in this runtime; production data is not guaranteed.")
     if not completeness["is_complete_worldcup_schedule"]:
         payload_warnings.append("資料仍在同步，fixture cache 尚未達完整世界盃賽程門檻。")
     if completeness["missing_reason"] == "demo_fallback_in_use":
