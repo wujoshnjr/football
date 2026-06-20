@@ -333,9 +333,9 @@ Acceptance criteria:
 
 ## Phase 13: GitHub Actions / CI
 
-Status: pending
+Status: complete
 
-Create or update workflow carefully.
+Created or updated workflow carefully.
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 13: GitHub Actions / CI.
+Phase 14: README / Model Card / Data Sources / Evaluation Docs.
