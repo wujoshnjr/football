@@ -84,6 +84,7 @@ def install_fake_fixture_cache(monkeypatch) -> None:
             "source_used": "cache",
             "generated_at": "2026-06-20T00:00:00+00:00",
             "cache_path": "data/cache/fixtures_latest.json",
+            "cache_exists": True,
             "warnings": [],
         }
 
@@ -123,6 +124,7 @@ def test_fixtures_tomorrow_returns_all_tomorrow_matches(monkeypatch) -> None:
     assert payload["fixture_count"] == 2
     assert [fixture["fixture_id"] for fixture in payload["fixtures"]] == ["match-tomorrow-1", "match-tomorrow-2"]
     assert payload["data_completeness"]["tomorrow_count"] == 2
+    assert payload["data_completeness"]["cache_exists"] is True
     assert_no_forbidden_betting_keys(payload)
 
 
@@ -147,6 +149,7 @@ def test_fixtures_status_query_filters_completed(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["fixture_count"] == 1
+    assert payload["data_completeness"]["cache_exists"] is True
     assert payload["fixtures"][0]["home_score"] == 2
     assert payload["fixtures"][0]["away_score"] == 1
     assert_no_forbidden_betting_keys(payload)
@@ -158,8 +161,32 @@ def test_demo_fallback_is_not_marked_complete_schedule() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["source_used"] == "demo_fallback"
+    assert payload["data_completeness"]["cache_exists"] is False
     assert payload["data_completeness"]["is_complete_worldcup_schedule"] is False
     assert payload["data_completeness"]["missing_reason"] == "demo_fallback_in_use"
     assert payload["data_completeness"]["fixture_count"] == 6
     assert any("Demo fallback" in warning for warning in payload["warnings"])
+    assert_no_forbidden_betting_keys(payload)
+
+
+def test_fixture_cache_status_missing_cache_does_not_crash(monkeypatch, tmp_path) -> None:
+    missing_cache = tmp_path / "missing" / "fixtures_latest.json"
+    missing_report = tmp_path / "missing" / "worldcup_fixture_cache_report.json"
+    monkeypatch.setattr(main, "FIXTURE_CACHE_PATHS", [missing_cache])
+    monkeypatch.setattr(main, "WORLD_CUP_FIXTURE_CACHE_REPORT_PATH", missing_report)
+    monkeypatch.setattr(main, "current_date_for_timezone", lambda tz: date(2026, 6, 20))
+
+    response = client.get("/fixtures/cache/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cache_exists"] is False
+    assert payload["fixture_count"] == 0
+    assert payload["completed_count"] == 0
+    assert payload["tomorrow_count"] == 0
+    assert payload["scheduled_count"] == 0
+    assert payload["is_complete_worldcup_schedule"] is False
+    assert payload["missing_reason"] == "fixture_cache_missing_or_empty"
+    assert payload["cache_path"] is None
+    assert payload["source_used"] == "cache_missing"
     assert_no_forbidden_betting_keys(payload)
