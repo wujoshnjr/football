@@ -23,6 +23,8 @@ type ProductFixture = {
 };
 
 type DataCompleteness = {
+  cache_exists: boolean;
+  cache_path?: string | null;
   fixture_count: number;
   completed_count: number;
   tomorrow_count: number;
@@ -53,32 +55,11 @@ type Forecast = {
   explanation: string[];
 };
 
-type SourceHealthItem = {
-  source_key: string;
-  ok: boolean;
-  status: string;
-  configured?: boolean;
-  enabled?: boolean;
-  attempted?: boolean;
-  record_count?: number;
-  latency_ms?: number | null;
-  error?: string | null;
-};
-
-type SourceHealthReport = {
-  serving_mode?: string;
-  generated_at?: string | null;
-  source_count?: number;
-  ok_count?: number;
-  sources?: SourceHealthItem[];
-  usage_note?: string;
-};
-
 type FetchResult<T> = { data: T; ok: boolean; error?: string };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 const requestTimeoutMs = 6500;
-const predictionFetchLimit = 6;
+const predictionFetchLimit = 3;
 
 function emptyFixturePayload(label: string): FixturePayload {
   return {
@@ -87,6 +68,8 @@ function emptyFixturePayload(label: string): FixturePayload {
     fixture_count: 0,
     fixtures: [],
     data_completeness: {
+      cache_exists: false,
+      cache_path: null,
       fixture_count: 0,
       completed_count: 0,
       tomorrow_count: 0,
@@ -95,7 +78,7 @@ function emptyFixturePayload(label: string): FixturePayload {
       missing_reason: 'frontend_fetch_failed',
       source_used: label,
     },
-    warnings: [],
+    warnings: ['Render 可能冷啟動，或 backend fixture API 暫時無回應。'],
     cache_path: null,
   };
 }
@@ -106,6 +89,35 @@ function isCompleted(fixture: ProductFixture) {
 
 function percent(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function taiwanDateKeyFromDate(value: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const year = parts.find((part) => part.type === 'year')?.value ?? '0000';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+  return `${year}-${month}-${day}`;
+}
+
+function tomorrowTaiwanDateKey() {
+  const todayKey = taiwanDateKeyFromDate(new Date());
+  const taiwanMidnight = new Date(`${todayKey}T00:00:00+08:00`);
+  taiwanMidnight.setUTCDate(taiwanMidnight.getUTCDate() + 1);
+  return taiwanDateKeyFromDate(taiwanMidnight);
+}
+
+function fixtureTaiwanDateKey(fixture: ProductFixture) {
+  const raw = fixture.kickoff_time_taiwan ?? fixture.kickoff_time;
+  if (!raw || raw === 'unknown') return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return taiwanDateKeyFromDate(parsed);
 }
 
 function displayTime(value?: string | null) {
@@ -133,7 +145,7 @@ function sourceBadges(fixture: ProductFixture) {
 function diagnosticMessage(result: FetchResult<unknown>) {
   if (result.ok) return '連線正常';
   if (result.error?.includes('timeout')) return 'Render 可能冷啟動，請稍後重試。';
-  return result.error ?? '後端暫時無回應';
+  return result.error ?? 'Render 可能冷啟動，或後端暫時無回應。';
 }
 
 async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutMs): Promise<FetchResult<T>> {
@@ -145,7 +157,7 @@ async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutM
     return { data: await response.json(), ok: true };
   } catch (error) {
     const message = error instanceof Error && error.name === 'AbortError'
-      ? `timeout after ${timeoutMs}ms`
+      ? `timeout after ${timeoutMs}ms; Render 可能冷啟動`
       : error instanceof Error ? error.message : 'unknown error';
     return { data: fallback, ok: false, error: message };
   } finally {
@@ -155,7 +167,7 @@ async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutM
 
 async function getForecast(fixture: ProductFixture): Promise<Forecast | null> {
   if (isCompleted(fixture)) return null;
-  const result = await getJson<Forecast | null>(`/predictions/${fixture.fixture_id}?source=auto`, null, 4200);
+  const result = await getJson<Forecast | null>(`/predictions/${fixture.fixture_id}?source=auto`, null, 3500);
   return result.ok ? result.data : null;
 }
 
@@ -166,18 +178,18 @@ function CompletenessNotice({ payload }: { payload: FixturePayload }) {
   }
   return (
     <div className="notice warn">
-      <strong>資料仍在同步</strong>
+      <strong>{payload.source_used === 'demo_fallback' ? 'Demo fallback，不是正式資料' : '資料仍在同步'}</strong>
+      <span>cache exists：{completeness.cache_exists ? 'yes' : 'no'}</span>
       <span>目前 cache 賽事數：{completeness.fixture_count}</span>
       <span>原因：{completeness.missing_reason ?? 'unknown'}</span>
       <span>更新指令：python scripts/build_worldcup_fixture_cache.py</span>
-      {payload.source_used === 'demo_fallback' ? <span>Demo fallback：目前不是正式完整賽程。</span> : null}
     </div>
   );
 }
 
 function ForecastSummary({ forecast }: { forecast: Forecast | null }) {
   if (!forecast) {
-    return <p className="aiSummary">AI 預測摘要：待產生，或後端模型暫時未回應。</p>;
+    return <p className="aiSummary">AI 預測摘要：待產生，或後端模型 / Render 冷啟動暫時未回應。</p>;
   }
   return (
     <div className="aiSummary">
@@ -221,25 +233,20 @@ function SectionEmpty({ title, detail }: { title: string; detail: string }) {
 }
 
 export default async function HomePage() {
-  const [scheduleResult, tomorrowResult, completedResult, sourceHealthResult] = await Promise.all([
-    getJson<FixturePayload>('/fixtures?status=all&tz=Asia/Taipei', emptyFixturePayload('schedule_fetch_failed')),
-    getJson<FixturePayload>('/fixtures/tomorrow?tz=Asia/Taipei', emptyFixturePayload('tomorrow_fetch_failed')),
-    getJson<FixturePayload>('/fixtures/completed?tz=Asia/Taipei', emptyFixturePayload('completed_fetch_failed')),
-    getJson<SourceHealthReport | null>('/data-sources/health', null, 5000),
-  ]);
+  const scheduleResult = await getJson<FixturePayload>(
+    '/fixtures?status=all&tz=Asia/Taipei',
+    emptyFixturePayload('schedule_fetch_failed'),
+  );
 
   const schedulePayload = scheduleResult.data;
-  const tomorrowPayload = tomorrowResult.data;
-  const completedPayload = completedResult.data;
-  const sourceHealth = sourceHealthResult.data;
-  const healthSources = sourceHealth?.sources ?? [];
-  const healthOkCount = sourceHealth?.ok_count ?? healthSources.filter((source) => source.ok).length;
   const completeness = schedulePayload.data_completeness;
-  const tomorrowPredictionTargets = tomorrowPayload.fixtures.filter((fixture) => !isCompleted(fixture)).slice(0, predictionFetchLimit);
-  const forecastPairs = await Promise.all(tomorrowPredictionTargets.map(async (fixture) => [fixture.fixture_id, await getForecast(fixture)] as const));
-  const forecastByFixture = new Map(forecastPairs);
+  const tomorrowKey = tomorrowTaiwanDateKey();
+  const tomorrowFixtures = schedulePayload.fixtures.filter((fixture) => fixtureTaiwanDateKey(fixture) === tomorrowKey);
   const completedSchedule = schedulePayload.fixtures.filter(isCompleted);
   const upcomingSchedule = schedulePayload.fixtures.filter((fixture) => !isCompleted(fixture));
+  const tomorrowPredictionTargets = tomorrowFixtures.filter((fixture) => !isCompleted(fixture)).slice(0, predictionFetchLimit);
+  const forecastPairs = await Promise.all(tomorrowPredictionTargets.map(async (fixture) => [fixture.fixture_id, await getForecast(fixture)] as const));
+  const forecastByFixture = new Map(forecastPairs);
 
   return (
     <main className="page">
@@ -251,30 +258,30 @@ export default async function HomePage() {
       <section className="hero matchHero">
         <p className="eyebrow">2026 FIFA World Cup</p>
         <h1>2026 世界盃比賽中心</h1>
-        <p className="subtitle">明日賽程、完賽比分、完整 fixture cache 與資料來源透明度集中在同一頁。工程診斷移到頁面底部，首頁先服務使用者看球需求。</p>
+        <p className="subtitle">明日賽程、完賽比分、完整 fixture cache 與資料來源透明度集中在同一頁。首頁只讀一次 fixture payload，再在前端分出明日、已完賽與完整賽程，降低 Render 冷啟動 timeout 風險。</p>
         <div className="metrics heroMetrics">
           <div><span>總賽事數</span><strong>{completeness.fixture_count}</strong></div>
           <div><span>已完賽</span><strong>{completeness.completed_count}</strong></div>
-          <div><span>明日賽事</span><strong>{completeness.tomorrow_count}</strong></div>
+          <div><span>明日賽事</span><strong>{tomorrowFixtures.length}</strong></div>
           <div><span>資料完整度</span><strong>{completeness.is_complete_worldcup_schedule ? '完整' : '同步中'}</strong></div>
         </div>
         <CompletenessNotice payload={schedulePayload} />
       </section>
 
       <section className="section" id="tomorrow">
-        <div className="sectionHead"><p>Tomorrow</p><h2>明日全部比賽</h2><span>預設 Asia/Taipei，不截斷前 4 場</span></div>
-        {tomorrowPayload.fixtures.length > 0 ? (
+        <div className="sectionHead"><p>Tomorrow</p><h2>明日全部比賽</h2><span>由單次 /fixtures payload 在前端篩選，不額外 fetch fixture endpoints</span></div>
+        {tomorrowFixtures.length > 0 ? (
           <div className="spotlight matchGrid">
-            {tomorrowPayload.fixtures.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} forecast={forecastByFixture.get(fixture.fixture_id) ?? null} />)}
+            {tomorrowFixtures.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} forecast={forecastByFixture.get(fixture.fixture_id) ?? null} />)}
           </div>
         ) : <SectionEmpty title="明日賽程尚未載入" detail="若資料來源仍在同步，請執行 fixture cache builder；Demo fallback 不會偽裝成完整賽程。" />}
       </section>
 
       <section className="section" id="completed">
-        <div className="sectionHead"><p>Results</p><h2>已完賽結果</h2><span>保留比分、勝負、來源與 finalized_at</span></div>
-        {completedPayload.fixtures.length > 0 ? (
+        <div className="sectionHead"><p>Results</p><h2>已完賽結果</h2><span>從主賽程 payload 篩出，保留比分、勝負、來源與 finalized_at</span></div>
+        {completedSchedule.length > 0 ? (
           <div className="grid resultGrid">
-            {completedPayload.fixtures.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} compact />)}
+            {completedSchedule.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} compact />)}
           </div>
         ) : <SectionEmpty title="尚無已完賽資料" detail="目前 cache 沒有 completed fixtures；若只看到 demo fallback，頁面會明確標示資料不完整。" />}
       </section>
@@ -297,10 +304,9 @@ export default async function HomePage() {
         <div className="sectionHead"><p>Diagnostics</p><h2>Runtime Diagnostics</h2><span>工程狀態保留在底部</span></div>
         <div className="diagnosticGrid">
           <div className="panel"><p className="eyebrow">Backend</p><h2>Fixture API</h2><span className={scheduleResult.ok ? 'chip ok' : 'chip bad'}>{diagnosticMessage(scheduleResult)}</span><p className="time">API Base：{API_BASE_URL}</p></div>
-          <div className="panel"><p className="eyebrow">Completeness</p><h2>Fixture Cache</h2><span className={completeness.is_complete_worldcup_schedule ? 'chip ok' : 'chip bad'}>{completeness.is_complete_worldcup_schedule ? '完整' : '同步中'}</span><p className="time">source：{schedulePayload.source_used}</p><p className="time">cache：{schedulePayload.cache_path ?? 'not available'}</p></div>
-          <div className="panel"><p className="eyebrow">Source Health</p><h2>Providers</h2><span className={sourceHealthResult.ok ? 'chip ok' : 'chip bad'}>{diagnosticMessage(sourceHealthResult)}</span><p className="time">健康來源：{healthOkCount}/{healthSources.length || 0}</p></div>
+          <div className="panel"><p className="eyebrow">Cache</p><h2>Runtime Fixture Cache</h2><span className={completeness.cache_exists ? 'chip ok' : 'chip bad'}>{completeness.cache_exists ? 'cache exists' : 'cache missing'}</span><p className="time">source：{schedulePayload.source_used}</p><p className="time">cache：{schedulePayload.cache_path ?? completeness.cache_path ?? 'not available'}</p></div>
+          <div className="panel"><p className="eyebrow">Completeness</p><h2>Schedule Quality</h2><span className={completeness.is_complete_worldcup_schedule ? 'chip ok' : 'chip bad'}>{completeness.is_complete_worldcup_schedule ? '完整' : '同步中'}</span><p className="time">missing_reason：{completeness.missing_reason ?? 'none'}</p><p className="time">Render 可能冷啟動時，首頁仍會保留 fallback JSON 狀態。</p></div>
         </div>
-        {healthSources.length > 0 ? <div className="sourceList">{healthSources.slice(0, 8).map((source) => <div key={source.source_key}><span>{source.source_key} · {source.status}</span><strong>{source.ok ? 'OK' : 'CHECK'}</strong></div>)}</div> : null}
       </section>
 
       <footer className="footer">World Cup Match Center — AI predictions are informational analysis only. No live betting, no wagering, no stake sizing.</footer>
