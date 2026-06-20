@@ -122,11 +122,14 @@ def build_worldcup_fixture_cache(
         source_used="fixture_ingestion_service",
         generated_at=generated_at,
     )
+    should_write_cache = bool(fixtures) or allow_empty
     completeness = data_completeness_report(
         fixtures,
         source_used="fixture_ingestion_service",
         today=current_date_for_timezone(DEFAULT_FIXTURE_TIMEZONE),
         tz=DEFAULT_FIXTURE_TIMEZONE,
+        cache_exists=should_write_cache,
+        cache_path=str(cache_path.relative_to(ROOT)),
     )
     cache_payload = {
         "generated_at": generated_at,
@@ -143,7 +146,6 @@ def build_worldcup_fixture_cache(
         ),
     }
 
-    should_write_cache = bool(fixtures) or allow_empty
     report = {
         "ok": should_write_cache,
         "generated_at": utc_now(),
