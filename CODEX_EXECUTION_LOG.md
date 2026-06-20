@@ -220,3 +220,25 @@ Safety status:
 - No prediction model behavior changes.
 - Manifest generation does not call external APIs or betting services.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 10: Evaluation / Calibration
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:18:20+08:00 |
+| completed_at | 2026-06-20T16:29:20+08:00 |
+| phase | Phase 10: Evaluation / Calibration |
+| files_changed | `scripts/football_calibration_report.py`, `scripts/football_model_vs_market_report.py`, `tests/test_football_evaluation.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_evaluation.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `1474ca62350a0ce49dcc2514e92961e6e66fd7e2`, `bb4b7792b82309ee08bb89ad37cabcd57ba4599e`, `d29986d2d28ab6d18a967e607035fe3e809bd8dd`, `8cbefa76d5da8d8b95fe9329b5c380bbbd21bd9a` |
+| notes | Added offline football calibration and model-vs-market report builders. Evaluation supports multiclass Brier score, multiclass LogLoss, home/draw/away calibration bins, group-stage and knockout slices, favorite-vs-underdog slices, no-vig 1X2 market consensus conversion, market movement evidence, source provenance summaries, and insufficient-sample status. Tests use static rows only and make no real external API calls. |
+| next_phase | Phase 11: Promotion Gate / Model Artifact Gate |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Market data is used only as market_consensus, external_signal, and paper_tracking evidence.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
