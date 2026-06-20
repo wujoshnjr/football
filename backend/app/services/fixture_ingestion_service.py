@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Type
 
+from app.services.source_report_compat import normalize_source_report
 from app.services.sources.base import BaseSourceAdapter, SourceAdapterResult
 from app.services.sources.api_football import ApiFootballAdapter
 from app.services.sources.espn import ESPNScoreboardAdapter
@@ -50,7 +51,7 @@ class FixtureIngestionService:
         results = [await self._safe_fetch(adapter) for adapter in adapters]
 
         normalized_by_source: dict[str, list[dict[str, Any]]] = {}
-        source_reports: list[dict[str, Any]] = []
+        legacy_source_reports: list[dict[str, Any]] = []
 
         for adapter, result in zip(adapters, results, strict=False):
             normalized_records: list[dict[str, Any]] = []
@@ -75,7 +76,7 @@ class FixtureIngestionService:
                         "retryable": False,
                     }
                 )
-            source_reports.append(report)
+            legacy_source_reports.append(report)
 
         fixtures = dedupe_fixtures(
             record
@@ -83,10 +84,15 @@ class FixtureIngestionService:
             if adapter.produces_fixtures
             for record in normalized_by_source.get(result.source_key, [])
         )
+        generated_at = datetime.now(timezone.utc).isoformat()
         return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": generated_at,
             "fixture_count": len(fixtures),
-            "sources": source_reports,
+            "sources": legacy_source_reports,
+            "source_reports": [
+                normalize_source_report(report, checked_at=generated_at)
+                for report in legacy_source_reports
+            ],
             "fixtures": fixtures,
             "usage_note": (
                 "Ingested fixtures are normalized snapshots built through app.services.sources adapters. "
