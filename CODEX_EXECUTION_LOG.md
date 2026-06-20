@@ -47,3 +47,24 @@ Safety status:
 - No API keys requested or committed.
 - No prediction model, adapter, or endpoint changes.
 - No live betting, automated wagering, real betting API, or pick submission changes.
+
+## Phase 2: Football Architecture Gap Analysis
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:22:08+08:00 |
+| completed_at | 2026-06-20T14:22:08+08:00 |
+| phase | Phase 2: Football Architecture Gap Analysis |
+| files_changed | `docs/FOOTBALL_ARCHITECTURE_GAP_ANALYSIS.md`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | Not run |
+| test_result | Not applicable: documentation-only phase. No backend, adapter, endpoint, prediction model, Render env, production deploy, or real API behavior changed. `pytest` is not available in this local workspace. |
+| commit_sha | `218d3fd3b1540a8350f2bbd3cc3dd4d7131908d9`, `e1d141015dcdc99b6dd5d3f0efb5fc27fc884d18` |
+| notes | Read football architecture files before writing the gap analysis, including FastAPI routes, config, schemas, safety policy, source fusion, fixture ingestion, adapter base, adapter registry, SportsDataIO adapter, Tournamental Bot Arena adapter, prediction service, feature table service, advanced feature registry, safety tests, requirements, and README. Identified keep/refactor/add recommendations, adapter report gaps, no-crash risks, source provenance gaps, no-live-betting policy gaps, and P0/P1/P2/P3 order. No football functionality was changed. |
+| next_phase | Phase 3: SourceRegistry and SourceReport Schema |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model, adapter, or endpoint behavior changes.
+- No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
