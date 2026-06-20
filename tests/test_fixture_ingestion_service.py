@@ -21,10 +21,12 @@ from app.services.fixture_ingestion_service import (
     normalize_openfootball_records,
     normalize_thesportsdb_records,
 )
+from app.services.sources.base import SourceAdapterResult
 from scripts.fixture_ingestion_service import (
     PHASE_ONE_FIXTURE_SOURCE_KEYS,
     FixtureIngestionService as ReportFixtureIngestionService,
 )
+from scripts.source_report_schema import validate_source_report
 
 
 def test_normalize_openfootball_records_extracts_fixture() -> None:
@@ -213,6 +215,40 @@ def test_tournamental_bot_arena_is_read_only_and_not_fixture_ingestion() -> None
     assert result.status == "read_only_benchmark_not_fixture_ingestion"
     assert result.record_count == 1
     assert result.records[0]["safety_note"] == "adapter does not submit picks or trigger live betting"
+
+
+def test_backend_fixture_ingestion_emits_valid_source_reports(monkeypatch) -> None:
+    class FakeAdapter:
+        produces_fixtures = True
+        source_key = "football_data"
+
+        async def fetch(self) -> SourceAdapterResult:
+            return SourceAdapterResult(
+                source_key="football_data",
+                attempted=True,
+                configured=True,
+                enabled=True,
+                ok=False,
+                status="parse_error",
+                error="json decode failed",
+                record_count=0,
+                records=[],
+                generated_at="2026-06-20T00:00:00+00:00",
+            )
+
+    monkeypatch.setattr(
+        "app.services.fixture_ingestion_service.build_source_adapters",
+        lambda settings, timeout_seconds: [FakeAdapter()],
+    )
+
+    report = FixtureIngestionService(SimpleNamespace()).ingest()
+
+    assert report["sources"][0]["status"] == "parse_error"
+    assert len(report["source_reports"]) == 1
+    assert report["source_reports"][0]["source"]["key"] == "football_data"
+    assert report["source_reports"][0]["status"] == "schema_mismatch"
+    assert report["source_reports"][0]["success"] is False
+    validate_source_report(report["source_reports"][0])
 
 
 def test_dedupe_prefers_espn_over_openfootball_for_same_fixture() -> None:
