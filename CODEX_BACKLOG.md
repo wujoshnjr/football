@@ -200,12 +200,12 @@ Acceptance criteria:
 
 ## Phase 8: Data Contract Validator
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_data_contract_validator.py`
-- [ ] `tests/test_football_data_contract_validator.py`
+- [x] `scripts/football_data_contract_validator.py`
+- [x] `tests/test_football_data_contract_validator.py`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 8: Data Contract Validator.
+Phase 9: Pipeline Manifest.
