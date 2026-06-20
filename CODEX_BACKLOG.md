@@ -352,14 +352,14 @@ Acceptance criteria:
 
 ## Phase 14: README / Model Card / Data Sources / Evaluation Docs
 
-Status: pending
+Status: complete
 
 Create or update:
 
-- [ ] `README.md`
-- [ ] `MODEL_CARD.md`
-- [ ] `DATA_SOURCES.md`
-- [ ] `docs/EVALUATION_METHOD.md`
+- [x] `README.md`
+- [x] `MODEL_CARD.md`
+- [x] `DATA_SOURCES.md`
+- [x] `docs/EVALUATION_METHOD.md`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 14: README / Model Card / Data Sources / Evaluation Docs.
+Phase 15: Final Integration Check.
