@@ -242,3 +242,25 @@ Safety status:
 - No prediction model behavior changes.
 - Market data is used only as market_consensus, external_signal, and paper_tracking evidence.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 11: Promotion Gate / Model Artifact Gate
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:29:20+08:00 |
+| completed_at | 2026-06-20T16:41:10+08:00 |
+| phase | Phase 11: Promotion Gate / Model Artifact Gate |
+| files_changed | `scripts/football_model_artifact_status.py`, `scripts/football_promotion_gate.py`, `tests/test_football_promotion_gate.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_promotion_gate.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `3239586c20851ae7a260822213f11158404238a4`, `1660e4d6d193a37e04c737bd9e36d7a319ea3956`, `45afd06c9b12656bb10f984780a503fbf69e006f`, `d650ff2e48a6e851d6add2db11a12b8822132805` |
+| notes | Added football model artifact status and promotion gate reports. Missing or unloadable model artifacts fall back to manual_baseline without crashing. Promotion gate blocks production-ready claims when clean_train_samples < 300, settled_predictions < 500, production_samples < 1000, feature_schema_hash mismatches, model_source is not eligible, data contract fails, or safety flags are true. Tests use temporary files/static dictionaries only and make no external API calls. |
+| next_phase | Phase 12: Tournamental Read-Only Adapter |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No model training or artifact loading beyond safe JSON metadata was added.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
