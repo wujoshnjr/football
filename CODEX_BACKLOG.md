@@ -136,15 +136,15 @@ Acceptance criteria:
 
 ## Phase 5: API Endpoints
 
-Status: pending
+Status: complete
 
-Create or update FastAPI endpoints:
+Created or updated FastAPI endpoints:
 
-- [ ] `/data-sources`
-- [ ] `/data-sources/context`
-- [ ] `/ingestion/fixtures`
-- [ ] `/fixtures`
-- [ ] `/fixtures/{fixture_id}`
+- [x] `/data-sources`
+- [x] `/data-sources/context`
+- [x] `/ingestion/fixtures`
+- [x] `/fixtures`
+- [x] `/fixtures/{fixture_id}`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 5: API Endpoints.
+Phase 6: Football Feature Schema.
