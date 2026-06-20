@@ -373,3 +373,25 @@ Safety status:
 - No prediction model, adapter, or endpoint behavior changed.
 - No automatic merge to main was performed.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## PR Review Fix: Canonical Source Wiring
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T19:44:00+08:00 |
+| completed_at | 2026-06-20T20:02:18+08:00 |
+| phase | PR Review Fix: Canonical Source Wiring |
+| files_changed | `backend/app/services/source_report_compat.py`, `backend/app/main.py`, `backend/app/services/fixture_ingestion_service.py`, `scripts/football_promotion_gate.py`, `.github/workflows/project-validation.yml`, `tests/test_api_endpoints.py`, `tests/test_fixture_ingestion_service.py`, `tests/test_football_promotion_gate.py`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_api_endpoints.py tests/test_fixture_ingestion_service.py tests/test_football_promotion_gate.py`; GitHub Actions `CI`; GitHub Actions `Project Validation`; Vercel |
+| test_result | Local `pytest` could not be executed because `pytest` is not recognized in this workspace. For code commit `85a604abd709d59b3d534b3cb4a3ea7afb40e617`, GitHub Actions passed: `CI` run 27870543006 success, `Project Validation` run 27870542978 success, and Vercel success. |
+| commit_sha | `361362336367500cf8d5d8eb02cea22572182c11`, `93c84f2f383fbeeaa3ecc24968afd05d5852fc1c`, `b91a414dae63d6eddf0126258efc71e1ec2b872a`, `9a2fd6b0cb8b9c7b25c7c14471b901133923b807`, `6e73a8d1992afa2e3ebcfe813e7d84b18cd179ae`, `5de30e26fea8ba442220a625e955fe01a1bc6160`, `9ad42d9731069ef69eeaa16d8a35fa3cfe14f623`, `85a604abd709d59b3d534b3cb4a3ea7afb40e617` |
+| notes | `/data-sources` now returns the canonical 13-source registry through `DataSourceStatus`, with `/data-sources/canonical` exposing canonical metadata without API key values. Backend fixture ingestion now preserves legacy `sources` and emits schema-valid `source_reports` using `validate_source_report()` compatible fields. `safe_fixture_ingestion_report()` converts legacy-only payloads and validates existing source reports without crashing. Promotion gate now treats `{ok: true, error_count: 0}` and status `ok`/`passed` data contract reports as passing. Project Validation backend env disables external providers and keeps betting/pick-submission safety flags false. No prediction model, Render env, production deploy, real betting API, live betting, automated wagering, recommended bet, stake sizing, or Tournamental pick submission changes. |
+| next_phase | Wait for user confirmation before additional work |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
