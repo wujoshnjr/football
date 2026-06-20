@@ -329,3 +329,25 @@ Safety status:
 - No API keys requested or committed.
 - No code behavior changed in this phase.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 15: Final Integration Check
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T17:19:59+08:00 |
+| completed_at | 2026-06-20T17:26:44+08:00 |
+| phase | Phase 15: Final Integration Check |
+| files_changed | `docs/FOOTBALL_MLB_MIGRATION_COMPLETION_REPORT.md`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest`; `python --version`; `python -m compileall backend scripts tests` |
+| test_result | Could not execute final checks in this local workspace. `pytest` is not recognized, and `python.exe` failed to start because the login session is unavailable or terminated. Data contract and pipeline manifest checks require Python and could not be executed locally. |
+| commit_sha | `3f43ec2cd29208ff83e93fcd64378bb9509675fb`, `94dc9f25715f1c15e810a750181199301a1f4a76` |
+| notes | Added final completion report with completed phases, no pending phases, added/modified file tables, test summary, remaining risks, safety assessment, API key leak risk, production deploy risk, and next steps. Compared branch `codex/engineering-control-docs` against `main`: branch is ahead by 49 commits, behind by 1 commit, and diverged. |
+| next_phase | No pending backlog phase |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No code behavior changed in this phase.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
