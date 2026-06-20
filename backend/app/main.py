@@ -14,6 +14,11 @@ from app.services.feature_table_service import build_match_feature_table
 from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
+from app.services.source_report_compat import (
+    canonical_data_source_statuses,
+    canonical_source_registry,
+    normalize_ingestion_report_source_reports,
+)
 from app.services.tournamental_odds_client import TournamentalOddsClient
 from app.services.tournamental_odds_normalizer import find_market_signal_for_fixture, normalize_tournamental_snapshot
 from app.services.tournamental_wc2026_client import TournamentalWC2026Client
@@ -123,7 +128,10 @@ def safe_fixture_ingestion_report() -> dict[str, Any]:
         }
 
     payload.setdefault("checked_at", payload.get("generated_at") or checked_at)
-    payload.setdefault("source_reports", payload.get("sources", []))
+    payload = normalize_ingestion_report_source_reports(
+        payload,
+        checked_at=payload.get("checked_at") or payload.get("generated_at") or checked_at,
+    )
     payload.setdefault("errors", [])
     payload.setdefault("warnings", [])
     payload.setdefault("safety", locked_safety_flags())
@@ -439,7 +447,12 @@ def health() -> dict[str, str]:
 
 @app.get("/data-sources", response_model=list[DataSourceStatus])
 def data_sources() -> list[DataSourceStatus]:
-    return safe_payload(SourceFusionService(settings).registry())
+    return safe_payload(canonical_data_source_statuses())
+
+
+@app.get("/data-sources/canonical")
+def data_sources_canonical():
+    return safe_payload(canonical_source_registry())
 
 
 @app.get("/data-sources/context")
