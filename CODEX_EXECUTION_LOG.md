@@ -264,3 +264,25 @@ Safety status:
 - No prediction model behavior changes.
 - No model training or artifact loading beyond safe JSON metadata was added.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 12: Tournamental Read-Only Adapter
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:41:10+08:00 |
+| completed_at | 2026-06-20T16:49:09+08:00 |
+| phase | Phase 12: Tournamental Read-Only Adapter |
+| files_changed | `scripts/adapters/tournamental_bot_arena_adapter.py`, `tests/test_tournamental_bot_arena_adapter.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_tournamental_bot_arena_adapter.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `e800dd982e80465c8e6275f629e4f423bf0b1e18`, `519f608d9b8c61bcd4fa4f8ee113d2b95ebb7dc2`, `45d04f1fa5e0c4225364773f2632a6f9edc7aad5` |
+| notes | Added read-only Tournamental Bot Arena adapter with `get_match_catalogue`, `get_odds`, `get_injuries`, `get_weather`, and `health_check`. The adapter uses env-only configuration, supports fake HTTP clients for tests, reports missing credentials, rate limits, schema mismatches, empty responses, timeouts, and upstream errors as JSON reports, strips forbidden upstream output keys, preserves source provenance, and does not implement pick-submission methods. Tests use fake clients only and make no external API calls. |
+| next_phase | Phase 13: GitHub Actions / CI |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Tournamental pick submission remains locked false even if env requests true.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
