@@ -351,3 +351,25 @@ Safety status:
 - No code behavior changed in this phase.
 - No automatic merge to main was performed.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## CI Fix: Project Validation Frontend Cache
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T17:32:00+08:00 |
+| completed_at | 2026-06-20T17:45:08+08:00 |
+| phase | CI Fix: Project Validation Frontend Cache |
+| files_changed | `.github/workflows/project-validation.yml`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | GitHub connector file checks for `frontend/package.json` and `frontend/package-lock.json`; GitHub Actions `CI`; GitHub Actions `Project Validation` |
+| test_result | `frontend/package.json` exists and `frontend/package-lock.json` is absent. Local `pytest` could not be executed because `pytest` is not recognized in this workspace. GitHub Actions passed for latest checked commit: `CI` run 27867372085 success, `Project Validation` run 27867372082 success. |
+| commit_sha | `05330d658f69129800d906cca98b1dd79935b165`, `b13c563e647f76b2badc429fc077d956c3d5ff4e` |
+| notes | Fixed Project Validation so `actions/setup-node@v4` only enables npm cache when both `frontend/package.json` and `frontend/package-lock.json` exist. The frontend job now uses uncached setup plus `npm install` when the package exists without a lockfile, and skips cleanly if the frontend package is absent. Merged main commit `44d762bb177e6548bf00dcae28774f4f18cc8201` into `codex/engineering-control-docs`; branch is now behind 0. No prediction model, adapter, safety policy, Render env, production deploy, real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes. |
+| next_phase | Wait for user confirmation before additional work |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model, adapter, or endpoint behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
