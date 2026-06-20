@@ -30,6 +30,26 @@ type SourceContext = {
   fixture_consensus_score: number;
   model_adjustment_note: string;
 };
+type SourceHealthItem = {
+  source_key: string;
+  ok: boolean;
+  status: string;
+  configured?: boolean;
+  enabled?: boolean;
+  attempted?: boolean;
+  record_count?: number;
+  latency_ms?: number | null;
+  error?: string | null;
+};
+type SourceHealthReport = {
+  report_type?: string;
+  serving_mode?: string;
+  generated_at?: string | null;
+  source_count?: number;
+  ok_count?: number;
+  sources?: SourceHealthItem[];
+  usage_note?: string;
+};
 type FetchResult<T> = { data: T; ok: boolean; error?: string };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
@@ -38,6 +58,7 @@ const fixtureSourceLabel = 'auto（cache-first）';
 const finalStates = ['finished', 'final', 'full_time'];
 const requestTimeoutMs = 5500;
 const featuredPredictionLimit = 4;
+const sourceHealthDisplayLimit = 8;
 
 function isFinal(fixture: Fixture) { return finalStates.includes(fixture.status.toLowerCase()); }
 function matchStatus(fixture: Fixture) { return isFinal(fixture) ? '已完賽' : '未開賽'; }
@@ -48,6 +69,7 @@ function displayTime(value: string) {
   if (Number.isNaN(parsed.getTime())) return '時間待定';
   return parsed.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 }
+function displayLatency(value?: number | null) { return typeof value === 'number' ? `${value}ms` : '未量測'; }
 
 async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutMs): Promise<FetchResult<T>> {
   const controller = new AbortController();
@@ -103,13 +125,19 @@ function MatchCard({ fixture, forecast, showPrediction = false }: { fixture: Fix
 }
 
 export default async function HomePage() {
-  const [fixtureResult, sourceResult] = await Promise.all([
+  const [fixtureResult, sourceResult, sourceHealthResult] = await Promise.all([
     getJson<Fixture[]>(`/fixtures?source=${fixtureSource}`, []),
     getJson<SourceContext | null>('/data-sources/context', null),
+    getJson<SourceHealthReport | null>('/data-sources/health', null, 5000),
   ]);
 
   const fixtures = fixtureResult.data;
   const sourceContext = sourceResult.data;
+  const sourceHealth = sourceHealthResult.data;
+  const healthSources = sourceHealth?.sources ?? [];
+  const healthOkCount = sourceHealth?.ok_count ?? healthSources.filter((source) => source.ok).length;
+  const healthIssueCount = Math.max(0, healthSources.length - healthOkCount);
+  const healthHealthy = sourceHealthResult.ok && healthSources.length > 0;
   const finalCount = fixtures.filter(isFinal).length;
   const upcoming = fixtures.filter((fixture) => !isFinal(fixture));
   const featured = upcoming.slice(0, featuredPredictionLimit);
@@ -126,21 +154,22 @@ export default async function HomePage() {
         <p className="eyebrow">World Cup Match Intelligence</p><h1>世界盃足球情報站</h1>
         <p className="subtitle">Vercel 前端連接後端 API，整合世界盃賽程、比分、AI 賽前分析與資料源透明度。首頁使用 cache-first 賽程來源，避免外部資料源拖慢頁面。</p>
         <div className="heroActions"><a href="#diagnostics">先看系統狀態</a><a href="#schedule">查看賽程</a><a href="#ai">AI 預測</a></div>
-        <div className="metrics heroMetrics"><div><span>追蹤賽事</span><strong>{fixtures.length}</strong></div><div><span>未開賽</span><strong>{upcoming.length}</strong></div><div><span>已完賽</span><strong>{finalCount}</strong></div></div>
+        <div className="metrics heroMetrics"><div><span>追蹤賽事</span><strong>{fixtures.length}</strong></div><div><span>未開賽</span><strong>{upcoming.length}</strong></div><div><span>來源健康</span><strong>{healthOkCount}/{healthSources.length || 0}</strong></div></div>
       </section>
       <section className="section" id="diagnostics">
         <div className="sectionHead"><p>Diagnostics</p><h2>系統狀態與問題診斷</h2><span>{fixtureSourceLabel}</span></div>
         <div className="diagnosticGrid">
           <div className="panel"><p className="eyebrow">Frontend</p><h2>Vercel 前端</h2><StatusChip ok={backendHealthy} label={backendHealthy ? '已連線' : '待確認'} /><p className="time">API Base：{API_BASE_URL}</p>{!fixtureResult.ok ? <p className="warning">/fixtures 失敗：{fixtureResult.error}</p> : null}{!sourceResult.ok ? <p className="warning">/data-sources/context 失敗：{sourceResult.error}</p> : null}</div>
           <div className="panel"><p className="eyebrow">Fixture Source</p><h2>賽程資料來源</h2><StatusChip ok={fixtureHealthy} label={fixtureHealthy ? '已載入' : '待確認'} /><p className="time">目前模式：{fixtureSourceLabel}</p><p className="time">首頁不再直接呼叫 /ingestion/fixtures；即時來源請在後端手動檢查。</p></div>
+          <div className="panel"><p className="eyebrow">Source Health</p><h2>API 健康檢查</h2><StatusChip ok={healthHealthy && healthIssueCount === 0} label={healthHealthy ? `${healthOkCount} ok / ${healthIssueCount} issue` : 'report 待產生'} /><p className="time">模式：{sourceHealth?.serving_mode ?? 'unavailable'}</p>{!sourceHealthResult.ok ? <p className="warning">/data-sources/health 失敗：{sourceHealthResult.error}</p> : null}</div>
           <div className="panel"><p className="eyebrow">Market Provider</p><h2>市場資料 API</h2><StatusChip ok={Boolean(sourceContext?.sources_configured?.includes('tournamental_odds'))} label={sourceContext?.sources_configured?.includes('tournamental_odds') ? '已設定' : '未設定'} /><p className="time">Tournamental odds 只作市場共識訊號，不作真實下注或 live betting。</p></div>
         </div>
       </section>
       {fixtures.length === 0 ? <section className="emptyState"><h2>目前沒有賽程資料</h2><p>優先檢查 Render 後端是否部署成功、Vercel 的 NEXT_PUBLIC_API_BASE_URL 是否指向後端，以及 /fixtures?source=auto 是否有資料。</p></section> : null}
       <section className="section" id="ai"><div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>顯示前 {featuredPredictionLimit} 場未開賽比賽，符合世界盃單日多場賽程</span></div><div className="spotlight">{featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} showPrediction />)}</div></section>
       <section className="section" id="schedule"><div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>source={fixtureSourceLabel}，所有時間以台灣時間顯示</span></div><section className="grid">{fixtures.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} />)}</section></section>
-      <section className="dashboardRow"><div className="panel" id="sources"><p className="eyebrow">Data Sources</p><h2>資料源狀態</h2><div className="sourceMeter"><strong>{sourceContext ? Math.round(sourceContext.reliability_score * 100) : 0}%</strong><span>source reliability</span></div><p className="time">已啟用：{sourceContext?.sources_configured?.length ?? 0} 個來源</p><p className="time">待補齊：{sourceContext?.sources_missing?.length ?? 0} 個來源</p><p className="warning">{sourceContext?.model_adjustment_note ?? '尚未取得 source context。'}</p></div><div className="panel" id="teams"><p className="eyebrow">Teams</p><h2>球隊戰力焦點</h2><div className="teamList">{topTeams.map((team) => <div key={team.id}><span>{team.name}</span><strong>{Math.round(team.elo_rating)}</strong></div>)}</div></div></section>
-      <section className="articleStrip"><article><p>目前狀態</p><h3>Vercel 前端使用 cache-first 後端賽程，降低外部 API timeout 對首頁的影響。</h3></article><article><p>資料策略</p><h3>source=auto 優先讀取本地快取，沒有快取才退回 demo；source=ingestion 保留給後端檢查。</h3></article><article><p>下一步</p><h3>新增可排程的 fixture cache 產生流程，讓前端讀到穩定快照。</h3></article></section>
+      <section className="dashboardRow"><div className="panel" id="sources"><p className="eyebrow">Data Sources</p><h2>資料源狀態</h2><div className="sourceMeter"><strong>{sourceContext ? Math.round(sourceContext.reliability_score * 100) : 0}%</strong><span>source reliability</span></div><p className="time">已啟用：{sourceContext?.sources_configured?.length ?? 0} 個來源</p><p className="time">待補齊：{sourceContext?.sources_missing?.length ?? 0} 個來源</p><p className="warning">{sourceContext?.model_adjustment_note ?? '尚未取得 source context。'}</p></div><div className="panel"><p className="eyebrow">Source Health Matrix</p><h2>API 即時健康報告</h2><div className="teamList">{healthSources.slice(0, sourceHealthDisplayLimit).map((source) => <div key={source.source_key}><span>{source.source_key} · {source.status} · {displayLatency(source.latency_ms)}</span><strong>{source.ok ? 'OK' : 'CHECK'}</strong></div>)}</div>{healthSources.length === 0 ? <p className="warning">尚未取得 source health report；請在 CI 或 Render 執行 build_source_health_report。</p> : null}</div><div className="panel" id="teams"><p className="eyebrow">Teams</p><h2>球隊戰力焦點</h2><div className="teamList">{topTeams.map((team) => <div key={team.id}><span>{team.name}</span><strong>{Math.round(team.elo_rating)}</strong></div>)}</div></div></section>
+      <section className="articleStrip"><article><p>目前狀態</p><h3>Vercel 前端使用 cache-first 後端賽程，降低外部 API timeout 對首頁的影響。</h3></article><article><p>資料策略</p><h3>source=auto 優先讀取本地快取，沒有快取才退回 demo；source health 由後端快取報告提供。</h3></article><article><p>下一步</p><h3>建立 prediction ledger、feature schema 與 backtest report，讓每次預測可驗證、可回測。</h3></article></section>
       <footer className="footer">World Cup IQ — AI predictions are informational analysis only.</footer>
     </main>
   );
