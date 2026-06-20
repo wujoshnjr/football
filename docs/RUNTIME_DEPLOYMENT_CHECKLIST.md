@@ -19,10 +19,29 @@ The backend runtime must return JSON for these public endpoints:
 | Endpoint | Expected behavior |
 | --- | --- |
 | `/health` | Returns application health and model version. |
+| `/runtime/version` | Returns runtime deployment metadata, git identifiers when present, and locked safety flags without exposing API keys. |
 | `/data-sources` | Returns the public canonical 13-source registry mapped to API status fields. |
 | `/data-sources/canonical` | Returns canonical source metadata without API key values. |
 | `/ingestion/fixtures` | Returns a JSON ingestion report even when providers are disabled, missing keys, rate limited, unavailable, or mismatched. |
 | `/fixtures` | Returns cached or demo fixture JSON without requiring external provider keys. |
+
+## Runtime Version Endpoint
+
+`GET /runtime/version` should return these fields:
+
+- `app`
+- `environment`
+- `git_commit`
+- `branch`
+- `deployed_at`
+- `live_betting_allowed`
+- `automated_wagering_allowed`
+- `real_money_betting_allowed`
+- `tournamental_pick_submission_allowed`
+
+Deployment metadata is read from environment variables only. `git_commit` checks `GIT_COMMIT`, `RENDER_GIT_COMMIT`, then `VERCEL_GIT_COMMIT_SHA`. `branch` checks `GIT_BRANCH`, then `RENDER_GIT_BRANCH`. `deployed_at` checks `DEPLOYED_AT`. Missing values must return `unknown` and must not crash the runtime.
+
+The endpoint must not return provider API keys, bearer tokens, betting recommendations, stake sizing, or any real-money wagering state.
 
 ## Render Backend Service
 
@@ -91,6 +110,7 @@ Confirm these remain false in deployment settings, generated reports, and API pa
 - `automated_wagering_allowed`
 - `real_money_betting_allowed`
 - `pick_submission_allowed`
+- `tournamental_pick_submission_allowed`
 - `TOURNAMENTAL_ENABLE_PICK_SUBMISSION`
 
 The runtime check is read-only. It must not call real betting APIs, submit picks, size stakes, or enable live betting.
