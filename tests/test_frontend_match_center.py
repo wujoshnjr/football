@@ -16,10 +16,10 @@ def test_homepage_is_world_cup_match_center_not_diagnostics_first() -> None:
     assert "明日全部比賽" in source
     assert "已完賽結果" in source
     assert "完整賽程" in source
-    assert source.index("2026 世界盃比賽中心") < source.index("明日全部比賽")
-    assert source.index("明日全部比賽") < source.index("已完賽結果")
-    assert source.index("已完賽結果") < source.index("完整賽程")
-    assert source.index("完整賽程") < source.index("Runtime Diagnostics")
+    assert source.index("2026 世界盃比賽中心") < source.index("id=\"tomorrow\"")
+    assert source.index("id=\"tomorrow\"") < source.index("id=\"completed\"")
+    assert source.index("id=\"completed\"") < source.index("id=\"schedule\"")
+    assert source.index("id=\"schedule\"") < source.index("id=\"diagnostics\"")
     assert "系統狀態與問題診斷" not in source
 
 
