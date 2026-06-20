@@ -175,17 +175,17 @@ Acceptance criteria:
 
 ## Phase 7: Snapshot Store
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_snapshot_store.py`
-- [ ] `tests/test_football_snapshot_store.py`
+- [x] `scripts/football_snapshot_store.py`
+- [x] `tests/test_football_snapshot_store.py`
 
 Artifacts:
 
-- `prediction_snapshots.csv`
-- `finalized_fixtures.csv`
+- `prediction_snapshots.csv` generation logic
+- `finalized_fixtures.csv` reserved artifact path
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 7: Snapshot Store.
+Phase 8: Data Contract Validator.
