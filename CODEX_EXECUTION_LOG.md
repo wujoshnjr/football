@@ -112,3 +112,24 @@ Safety status:
 - No prediction model changes.
 - No real external API calls made by tests or implementation.
 - No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 5: API Endpoints
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:51:08+08:00 |
+| completed_at | 2026-06-20T15:17:27+08:00 |
+| phase | Phase 5: API Endpoints |
+| files_changed | `backend/app/main.py`, `tests/test_api_endpoints.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_api_endpoints.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `443a8c8f32b383f395a909577a0192b67a4fde34`, `b9f084be7e629a61a5f87a6347f2f935f802f477`, `d8a4bdeea33c5940d552b5aede84f91e027d1762` |
+| notes | Added standardized API error payloads, endpoint payload safety scanning for forbidden betting keys, locked safety flags, and a no-crash JSON fallback for `/ingestion/fixtures` if ingestion raises before producing a report. Added API endpoint contract tests using FastAPI TestClient and monkeypatched ingestion failures. No endpoint test calls real external APIs. |
+| next_phase | Phase 6: Football Feature Schema |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
