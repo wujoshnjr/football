@@ -300,12 +300,12 @@ Acceptance criteria:
 
 ## Phase 12: Tournamental Read-Only Adapter
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `scripts/adapters/tournamental_bot_arena_adapter.py`
-- [ ] `tests/test_tournamental_bot_arena_adapter.py`
+- [x] `scripts/adapters/tournamental_bot_arena_adapter.py`
+- [x] `tests/test_tournamental_bot_arena_adapter.py`
 
 Read-only methods:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 12: Tournamental Read-Only Adapter.
+Phase 13: GitHub Actions / CI.
