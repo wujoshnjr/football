@@ -37,6 +37,57 @@ def test_health_endpoint_returns_model_version() -> None:
     assert_no_forbidden_betting_keys(payload)
 
 
+def test_runtime_version_endpoint_returns_deploy_metadata_without_secret_leak(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_COMMIT", "abc123")
+    monkeypatch.setenv("GIT_BRANCH", "main")
+    monkeypatch.setenv("DEPLOYED_AT", "2026-06-20T00:00:00Z")
+    monkeypatch.setenv("FOOTBALL_DATA_TOKEN", "runtime-secret-token")
+    monkeypatch.setenv("SPORTSDATAIO_API_KEY", "runtime-secret-sportsdataio")
+
+    response = client.get("/runtime/version")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["app"] == main.settings.app_name
+    assert payload["environment"] == main.settings.app_env
+    assert payload["git_commit"] == "abc123"
+    assert payload["branch"] == "main"
+    assert payload["deployed_at"] == "2026-06-20T00:00:00Z"
+    assert payload["live_betting_allowed"] is False
+    assert payload["automated_wagering_allowed"] is False
+    assert payload["real_money_betting_allowed"] is False
+    assert payload["tournamental_pick_submission_allowed"] is False
+    serialized = json.dumps(payload)
+    assert "runtime-secret-token" not in serialized
+    assert "runtime-secret-sportsdataio" not in serialized
+    assert_no_forbidden_betting_keys(payload)
+
+
+def test_runtime_version_endpoint_falls_back_to_unknown(monkeypatch) -> None:
+    for key in (
+        "GIT_COMMIT",
+        "RENDER_GIT_COMMIT",
+        "VERCEL_GIT_COMMIT_SHA",
+        "GIT_BRANCH",
+        "RENDER_GIT_BRANCH",
+        "DEPLOYED_AT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    response = client.get("/runtime/version")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["git_commit"] == "unknown"
+    assert payload["branch"] == "unknown"
+    assert payload["deployed_at"] == "unknown"
+    assert payload["live_betting_allowed"] is False
+    assert payload["automated_wagering_allowed"] is False
+    assert payload["real_money_betting_allowed"] is False
+    assert payload["tournamental_pick_submission_allowed"] is False
+    assert_no_forbidden_betting_keys(payload)
+
+
 def test_invalid_fixture_source_uses_standard_error() -> None:
     response = client.get("/fixtures", params={"source": "bad"})
 
