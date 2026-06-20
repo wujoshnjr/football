@@ -395,3 +395,25 @@ Safety status:
 - No prediction model behavior changed.
 - No automatic merge to main was performed.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Runtime Deployment Health Check
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T21:35:00+08:00 |
+| completed_at | 2026-06-20T21:40:30+08:00 |
+| phase | Runtime Deployment Health Check |
+| files_changed | `docs/RUNTIME_DEPLOYMENT_CHECKLIST.md`, `scripts/runtime_smoke_check.py`, `tests/test_runtime_smoke_check.py`, `README.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_runtime_smoke_check.py`; GitHub Actions `CI`; Vercel |
+| test_result | Local `pytest` could not be executed because `pytest` is not recognized in this workspace. For commit `a67b8ec0175173cfbc5de90209e569f61445c9f8`, GitHub Actions `CI` run 27872856646 completed with success and Vercel completed with success. |
+| commit_sha | `439276d2aaa388ef45957dc965db50fdb89c24f5`, `b38896d643928f80e7eb20b42cf0ba347e2d5222`, `0d8da89d6ad173afe9cdf847f990014958449106`, `a67b8ec0175173cfbc5de90209e569f61445c9f8` |
+| notes | Added a deployment runtime checklist, read-only runtime smoke check script, focused tests with mocked HTTP calls, and README usage notes. The smoke check reads `FOOTBALL_BACKEND_URL`, returns `missing_backend_url` as JSON when unset, checks `/health`, `/data-sources`, `/data-sources/canonical`, `/ingestion/fixtures`, and `/fixtures` when configured, and redacts secret-like URL/query/env values from output. No prediction model, Render env, production deploy, real betting API, live betting, automated wagering, recommended bet, stake sizing, high-frequency external API calls, or Tournamental pick submission changes. |
+| next_phase | Configure a public backend URL in deployment and run `FOOTBALL_BACKEND_URL=<backend-url> python scripts/runtime_smoke_check.py` against it. |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
