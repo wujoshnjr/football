@@ -10,6 +10,18 @@ on:
 jobs:
   backend-validation:
     runs-on: ubuntu-latest
+    env:
+      LIVE_BETTING_ALLOWED: "false"
+      AUTOMATED_WAGERING_ALLOWED: "false"
+      REAL_MONEY_BETTING_ALLOWED: "false"
+      TOURNAMENTAL_ENABLE_PICK_SUBMISSION: "false"
+      FOOTBALL_DATA_ENABLED: "false"
+      API_FOOTBALL_ENABLED: "false"
+      WORLD_CUP_2026_API_ENABLED: "false"
+      OPENFOOTBALL_WORLDCUP_JSON_ENABLED: "false"
+      SPORTSDATAIO_ENABLED: "false"
+      THESTATSAPI_ENABLED: "false"
+      TOURNAMENTAL_ENABLED: "false"
     defaults:
       run:
         working-directory: .
