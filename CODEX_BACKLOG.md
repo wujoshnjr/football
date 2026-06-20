@@ -17,7 +17,7 @@ Rules for each round:
 ## P0: Engineering Rules and Safety
 
 - [x] Confirm `AGENTS.md` is complete for current project guardrails.
-- [ ] Create no-live-betting policy test.
+- [x] Create no-live-betting policy test.
 - [ ] Create API-key-must-not-be-written-to-repo check.
 - [ ] Create source report schema.
 
@@ -157,11 +157,11 @@ Acceptance criteria:
 
 ## Next Recommended Task
 
-P0 next unfinished task: create the no-live-betting policy test.
+P0 next unfinished task: create the API-key-must-not-be-written-to-repo check.
 
-Suggested first implementation scope:
+Suggested next implementation scope:
 
-- Add a minimal backend safety policy module if none exists.
-- Add pytest coverage proving live betting and automated wagering default to false.
-- Add pytest coverage proving forbidden output keys are blocked or absent from safety policy output.
+- Add a focused test or script that scans committed text files for provider secret patterns.
+- Allow safe placeholders and documented non-secret IDs.
+- Keep API keys loaded from environment variables only.
 - Keep the round under 3 to 6 files.
