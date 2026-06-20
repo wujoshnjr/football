@@ -46,6 +46,7 @@ FIXTURE_CACHE_PATHS = [
     ROOT_DIR / "report" / "fixtures_latest.json",
 ]
 SOURCE_HEALTH_REPORT_PATH = ROOT_DIR / "report" / "source_health_report.json"
+WORLD_CUP_FIXTURE_CACHE_REPORT_PATH = ROOT_DIR / "report" / "worldcup_fixture_cache_report.json"
 FIXTURE_SOURCE_DESCRIPTION = "Fixture source: auto, demo, cache, or ingestion."
 
 
@@ -334,9 +335,17 @@ def source_health_report() -> dict[str, Any]:
     }
 
 
+def first_existing_fixture_cache_path() -> Path | None:
+    for path in FIXTURE_CACHE_PATHS:
+        if path.exists():
+            return path
+    return None
+
+
 def cached_fixture_snapshot() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read the generated fixture cache and keep metadata for completeness reports."""
 
+    first_existing_path = first_existing_fixture_cache_path()
     for path in FIXTURE_CACHE_PATHS:
         payload = load_json_file(path)
         records: list[Any]
@@ -354,15 +363,69 @@ def cached_fixture_snapshot() -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 "source_used": "cache",
                 "generated_at": generated_at,
                 "cache_path": str(path.relative_to(ROOT_DIR)),
+                "cache_exists": True,
                 "warnings": [],
             }
 
+    cache_path = str(first_existing_path.relative_to(ROOT_DIR)) if first_existing_path else None
     return [], {
         "source_used": "cache_missing",
         "generated_at": utc_now(),
-        "cache_path": None,
+        "cache_path": cache_path,
+        "cache_exists": bool(first_existing_path),
         "warnings": ["Fixture cache is missing or empty; run scripts/build_worldcup_fixture_cache.py."],
     }
+
+
+def fixture_cache_status_report(tz: str = DEFAULT_FIXTURE_TIMEZONE) -> dict[str, Any]:
+    cache_path = first_existing_fixture_cache_path()
+    cache_exists = cache_path is not None
+    report = load_json_file(WORLD_CUP_FIXTURE_CACHE_REPORT_PATH)
+
+    if isinstance(report, dict):
+        payload = {
+            "cache_exists": cache_exists,
+            "fixture_count": int(report.get("fixture_count") or 0),
+            "completed_count": int(report.get("completed_count") or 0),
+            "tomorrow_count": int(report.get("tomorrow_count") or 0),
+            "scheduled_count": int(report.get("scheduled_count") or 0),
+            "is_complete_worldcup_schedule": bool(report.get("is_complete_worldcup_schedule")) and cache_exists,
+            "missing_reason": report.get("missing_reason"),
+            "cache_path": report.get("cache_path") or (str(cache_path.relative_to(ROOT_DIR)) if cache_path else None),
+            "generated_at": report.get("generated_at"),
+            "source_used": report.get("source_used") or "worldcup_fixture_cache_report",
+        }
+        if not cache_exists:
+            payload["missing_reason"] = payload["missing_reason"] or "cache_missing_in_runtime"
+            payload["is_complete_worldcup_schedule"] = False
+        return safe_payload(payload)
+
+    records, metadata = cached_fixture_snapshot()
+    fallback_payload = build_fixture_api_payload(
+        records,
+        source_used=metadata.get("source_used", "cache_missing"),
+        generated_at=metadata.get("generated_at") or utc_now(),
+        today=current_date_for_timezone(tz),
+        tz=tz,
+        cache_exists=bool(metadata.get("cache_exists")),
+        cache_path=metadata.get("cache_path"),
+        warnings=metadata.get("warnings", []),
+    )
+    completeness = fallback_payload["data_completeness"]
+    return safe_payload(
+        {
+            "cache_exists": bool(completeness.get("cache_exists")),
+            "fixture_count": completeness["fixture_count"],
+            "completed_count": completeness["completed_count"],
+            "tomorrow_count": completeness["tomorrow_count"],
+            "scheduled_count": completeness["scheduled_count"],
+            "is_complete_worldcup_schedule": completeness["is_complete_worldcup_schedule"],
+            "missing_reason": completeness["missing_reason"] or "cache_report_missing",
+            "cache_path": completeness.get("cache_path"),
+            "generated_at": fallback_payload.get("generated_at"),
+            "source_used": completeness["source_used"],
+        }
+    )
 
 
 def cached_fixture_records() -> list[dict]:
@@ -389,6 +452,7 @@ def fixture_product_records(source: str = "auto") -> tuple[list[dict[str, Any]],
             "source_used": "demo_fallback",
             "generated_at": utc_now(),
             "cache_path": None,
+            "cache_exists": False,
             "warnings": ["Demo fallback requested explicitly; this is not a complete World Cup schedule."],
         }
     if source == "ingestion":
@@ -400,6 +464,7 @@ def fixture_product_records(source: str = "auto") -> tuple[list[dict[str, Any]],
                 "source_used": "ingestion_failed",
                 "generated_at": checked_at,
                 "cache_path": None,
+                "cache_exists": False,
                 "warnings": [f"Fixture ingestion failed: {type(exc).__name__}"],
             }
         records = payload.get("fixtures", []) if isinstance(payload, dict) else []
@@ -407,6 +472,7 @@ def fixture_product_records(source: str = "auto") -> tuple[list[dict[str, Any]],
             "source_used": "ingestion",
             "generated_at": payload.get("generated_at") or checked_at if isinstance(payload, dict) else checked_at,
             "cache_path": None,
+            "cache_exists": False,
             "warnings": [],
         }
     if source == "auto":
@@ -416,8 +482,12 @@ def fixture_product_records(source: str = "auto") -> tuple[list[dict[str, Any]],
         return demo_fixture_records(), {
             "source_used": "demo_fallback",
             "generated_at": utc_now(),
-            "cache_path": None,
-            "warnings": ["Fixture cache is missing or empty; serving demo fallback until cache is built."],
+            "cache_path": metadata.get("cache_path"),
+            "cache_exists": bool(metadata.get("cache_exists")),
+            "warnings": [
+                "Fixture cache is missing or empty; serving demo fallback until cache is built.",
+                "Demo fallback is not official production data.",
+            ],
         }
     raise HTTPException(
         status_code=400,
@@ -453,6 +523,8 @@ def fixture_product_payload(
             tz=tz,
             limit=limit,
             warnings=metadata.get("warnings", []),
+            cache_exists=bool(metadata.get("cache_exists")),
+            cache_path=metadata.get("cache_path"),
         )
     except ValueError as exc:
         raise HTTPException(
@@ -649,6 +721,11 @@ def wc2026_upcoming():
 @app.get("/wc2026/match/{match_id}")
 def wc2026_match(match_id: str):
     return safe_payload(tournamental_wc2026().match(match_id))
+
+
+@app.get("/fixtures/cache/status")
+def fixtures_cache_status(tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE)):
+    return fixture_cache_status_report(tz=tz)
 
 
 @app.get("/fixtures")
