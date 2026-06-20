@@ -221,14 +221,14 @@ Acceptance criteria:
 
 ## Phase 9: Pipeline Manifest
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_pipeline_manifest.py`
-- [ ] `tests/test_football_pipeline_manifest.py`
+- [x] `scripts/football_pipeline_manifest.py`
+- [x] `tests/test_football_pipeline_manifest.py`
 
-Track artifacts:
+Tracked artifacts:
 
 - `report/prediction.json`
 - `report/fixture_ingestion_report.json`
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 9: Pipeline Manifest.
+Phase 10: Evaluation / Calibration.
