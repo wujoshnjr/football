@@ -256,13 +256,13 @@ Acceptance criteria:
 
 ## Phase 10: Evaluation / Calibration
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `scripts/football_calibration_report.py`
-- [ ] `scripts/football_model_vs_market_report.py`
-- [ ] `tests/test_football_evaluation.py`
+- [x] `scripts/football_calibration_report.py`
+- [x] `scripts/football_model_vs_market_report.py`
+- [x] `tests/test_football_evaluation.py`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 10: Evaluation / Calibration.
+Phase 11: Promotion Gate / Model Artifact Gate.
