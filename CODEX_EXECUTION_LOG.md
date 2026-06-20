@@ -417,3 +417,25 @@ Safety status:
 - No prediction model behavior changed.
 - No automatic merge to main was performed.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Runtime Version Endpoint
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T23:11:27+08:00 |
+| completed_at | 2026-06-20T23:49:54+08:00 |
+| phase | Runtime Version Endpoint |
+| files_changed | `backend/app/main.py`, `tests/test_api_endpoints.py`, `docs/RUNTIME_DEPLOYMENT_CHECKLIST.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_api_endpoints.py`; GitHub Actions `CI`; Vercel |
+| test_result | Local `pytest` could not be executed because `pytest` is not recognized in this workspace. For commit `bfa355a8b3d89e03e48c7d487452860852534d36`, GitHub Actions `CI` run 27876065777 completed with success and Vercel completed with success. |
+| commit_sha | `b15c37be4467f02e666097312f6d0b90042af209`, `7108c2d3fd621e48e92a4239de5a49b91b945880`, `bfa355a8b3d89e03e48c7d487452860852534d36` |
+| notes | Added GET `/runtime/version` with app/environment metadata, deployment git metadata from env-only values, `unknown` fallbacks for missing deploy env, and locked false safety flags for live betting, automated wagering, real-money betting, and Tournamental pick submission. Added endpoint tests for env metadata, missing-env fallback, secret non-disclosure, and forbidden betting output keys. Updated runtime checklist with the new endpoint. No prediction model, Render env, production deploy, real betting API, live betting, automated wagering, recommended bet, stake sizing, or Tournamental pick submission changes. |
+| next_phase | Wait for user confirmation before additional work |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
