@@ -286,3 +286,25 @@ Safety status:
 - No prediction model behavior changes.
 - Tournamental pick submission remains locked false even if env requests true.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 13: GitHub Actions / CI
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:49:09+08:00 |
+| completed_at | 2026-06-20T16:58:46+08:00 |
+| phase | Phase 13: GitHub Actions / CI |
+| files_changed | `.github/workflows/ci.yml`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Workflow was added but not run locally. |
+| commit_sha | `6f222392633158a26616453ce3aecfcffcbfa4fe`, `59176210b832fff4291bea6c0229b12ba012b5ff` |
+| notes | Added safe GitHub Actions CI workflow. Workflow installs `backend/requirements.txt`, compiles `backend`, `scripts`, and `tests`, runs pytest, runs lightweight data contract checks without requiring generated reports, and builds pipeline manifest diagnostics. Workflow sets external provider env flags to disabled, locks Tournamental pick submission false, uses read-only repository permissions, and includes no deploy step. |
+| next_phase | Phase 14: README / Model Card / Data Sources / Evaluation Docs |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- Workflow does not require secrets or external provider API keys.
+- Workflow does not trigger real API high-frequency calls.
+- Workflow does not trigger betting, pick submission, or production deployment.
