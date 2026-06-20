@@ -157,12 +157,12 @@ Acceptance criteria:
 
 ## Phase 6: Football Feature Schema
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_feature_schema.py`
-- [ ] `tests/test_football_feature_schema.py`
+- [x] `scripts/football_feature_schema.py`
+- [x] `tests/test_football_feature_schema.py`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 6: Football Feature Schema.
+Phase 7: Snapshot Store.
