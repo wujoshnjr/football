@@ -23,12 +23,18 @@ def test_homepage_is_world_cup_match_center_not_diagnostics_first() -> None:
     assert "系統狀態與問題診斷" not in source
 
 
-def test_homepage_uses_product_fixture_endpoints() -> None:
+def test_homepage_uses_single_product_fixture_fetch() -> None:
     source = page_source()
 
-    assert "/fixtures/tomorrow?tz=Asia/Taipei" in source
-    assert "/fixtures/completed?tz=Asia/Taipei" in source
     assert "/fixtures?status=all&tz=Asia/Taipei" in source
+    assert "/fixtures/tomorrow?tz=Asia/Taipei" not in source
+    assert "/fixtures/completed?tz=Asia/Taipei" not in source
+    assert "/data-sources/health" not in source
+    assert source.count("getJson<FixturePayload>") == 1
+    assert "tomorrowFixtures = schedulePayload.fixtures.filter" in source
+    assert "completedSchedule = schedulePayload.fixtures.filter" in source
+    assert "upcomingSchedule = schedulePayload.fixtures.filter" in source
+    assert "predictionFetchLimit = 3" in source
     assert "Demo fallback" in source
     assert "python scripts/build_worldcup_fixture_cache.py" in source
 
