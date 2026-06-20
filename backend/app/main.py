@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,11 @@ from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelP
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
 from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
+from app.services.fixture_product_service import (
+    DEFAULT_FIXTURE_TIMEZONE,
+    build_fixture_api_payload,
+    current_date_for_timezone,
+)
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
 from app.services.source_report_compat import (
@@ -329,6 +334,37 @@ def source_health_report() -> dict[str, Any]:
     }
 
 
+def cached_fixture_snapshot() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read the generated fixture cache and keep metadata for completeness reports."""
+
+    for path in FIXTURE_CACHE_PATHS:
+        payload = load_json_file(path)
+        records: list[Any]
+        generated_at = utc_now()
+        if isinstance(payload, dict):
+            records = payload.get("fixtures", [])
+            generated_at = payload.get("generated_at") or payload.get("synced_at") or generated_at
+        elif isinstance(payload, list):
+            records = payload
+        else:
+            records = []
+
+        if isinstance(records, list) and records:
+            return [record for record in records if isinstance(record, dict)], {
+                "source_used": "cache",
+                "generated_at": generated_at,
+                "cache_path": str(path.relative_to(ROOT_DIR)),
+                "warnings": [],
+            }
+
+    return [], {
+        "source_used": "cache_missing",
+        "generated_at": utc_now(),
+        "cache_path": None,
+        "warnings": ["Fixture cache is missing or empty; run scripts/build_worldcup_fixture_cache.py."],
+    }
+
+
 def cached_fixture_records() -> list[dict]:
     """Read pre-generated fixture snapshots without calling external APIs.
 
@@ -337,19 +373,94 @@ def cached_fixture_records() -> list[dict]:
     - [...] as a raw fixture list
     """
 
-    for path in FIXTURE_CACHE_PATHS:
-        payload = load_json_file(path)
-        if isinstance(payload, dict):
-            records = payload.get("fixtures", [])
-        elif isinstance(payload, list):
-            records = payload
-        else:
-            records = []
+    records, _metadata = cached_fixture_snapshot()
+    return records
 
-        if isinstance(records, list):
-            return [record for record in records if isinstance(record, dict)]
 
-    return []
+def demo_fixture_records() -> list[dict[str, Any]]:
+    return [to_plain_payload(fixture) for fixture in demo_fixtures()]
+
+
+def fixture_product_records(source: str = "auto") -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if source == "cache":
+        return cached_fixture_snapshot()
+    if source == "demo":
+        return demo_fixture_records(), {
+            "source_used": "demo_fallback",
+            "generated_at": utc_now(),
+            "cache_path": None,
+            "warnings": ["Demo fallback requested explicitly; this is not a complete World Cup schedule."],
+        }
+    if source == "ingestion":
+        checked_at = utc_now()
+        try:
+            payload = fixture_ingestion()
+        except Exception as exc:  # noqa: BLE001 - product endpoint returns JSON fallback instead of crashing
+            return [], {
+                "source_used": "ingestion_failed",
+                "generated_at": checked_at,
+                "cache_path": None,
+                "warnings": [f"Fixture ingestion failed: {type(exc).__name__}"],
+            }
+        records = payload.get("fixtures", []) if isinstance(payload, dict) else []
+        return [record for record in records if isinstance(record, dict)], {
+            "source_used": "ingestion",
+            "generated_at": payload.get("generated_at") or checked_at if isinstance(payload, dict) else checked_at,
+            "cache_path": None,
+            "warnings": [],
+        }
+    if source == "auto":
+        records, metadata = cached_fixture_snapshot()
+        if records:
+            return records, metadata
+        return demo_fixture_records(), {
+            "source_used": "demo_fallback",
+            "generated_at": utc_now(),
+            "cache_path": None,
+            "warnings": ["Fixture cache is missing or empty; serving demo fallback until cache is built."],
+        }
+    raise HTTPException(
+        status_code=400,
+        detail=api_error(
+            "invalid_fixture_source",
+            "source must be one of: auto, demo, cache, ingestion",
+            {"source": source},
+        ),
+    )
+
+
+def fixture_product_payload(
+    *,
+    source: str = "auto",
+    status: str = "all",
+    date_filter: str | None = None,
+    target_date=None,
+    stage: str | None = None,
+    tz: str = DEFAULT_FIXTURE_TIMEZONE,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    records, metadata = fixture_product_records(source)
+    try:
+        payload = build_fixture_api_payload(
+            records,
+            source_used=metadata.get("source_used", source),
+            generated_at=metadata.get("generated_at") or utc_now(),
+            today=current_date_for_timezone(tz),
+            status=status,
+            date_filter=date_filter,
+            target_date=target_date,
+            stage=stage,
+            tz=tz,
+            limit=limit,
+            warnings=metadata.get("warnings", []),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=api_error("invalid_fixture_filter", str(exc), {"status": status, "date": date_filter, "stage": stage}),
+        ) from exc
+    payload["cache_path"] = metadata.get("cache_path")
+    return safe_payload(payload)
 
 
 def record_team_name(record: dict, flat_key: str, nested_key: str) -> str | None:
@@ -540,9 +651,64 @@ def wc2026_match(match_id: str):
     return safe_payload(tournamental_wc2026().match(match_id))
 
 
-@app.get("/fixtures", response_model=list[Fixture])
-def list_fixtures(source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION)) -> list[Fixture]:
-    return safe_payload(fixtures_by_source(source))
+@app.get("/fixtures")
+def list_fixtures(
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
+    status: str = Query(default="all", description="completed, scheduled, live, or all"),
+    date: str | None = Query(default=None, description="YYYY-MM-DD in the requested timezone"),
+    stage: str | None = Query(default=None, description="Stage or group label, for example Group A"),
+    tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE, description="IANA timezone, default Asia/Taipei"),
+    limit: int | None = Query(default=None, ge=1),
+):
+    return fixture_product_payload(source=source, status=status, date_filter=date, stage=stage, tz=tz, limit=limit)
+
+
+@app.get("/fixtures/completed")
+def completed_fixtures(
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
+    tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE),
+    limit: int | None = Query(default=None, ge=1),
+):
+    return fixture_product_payload(source=source, status="completed", tz=tz, limit=limit)
+
+
+@app.get("/fixtures/today")
+def today_fixtures(
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
+    tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE),
+    limit: int | None = Query(default=None, ge=1),
+):
+    today = current_date_for_timezone(tz)
+    return fixture_product_payload(source=source, status="all", target_date=today, tz=tz, limit=limit)
+
+
+@app.get("/fixtures/tomorrow")
+def tomorrow_fixtures(
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
+    tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE),
+    limit: int | None = Query(default=None, ge=1),
+):
+    tomorrow = current_date_for_timezone(tz) + timedelta(days=1)
+    return fixture_product_payload(source=source, status="all", target_date=tomorrow, tz=tz, limit=limit)
+
+
+@app.get("/fixtures/date/{fixture_date}")
+def fixtures_for_date(
+    fixture_date: str,
+    source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
+    status: str = Query(default="all", description="completed, scheduled, live, or all"),
+    stage: str | None = Query(default=None),
+    tz: str = Query(default=DEFAULT_FIXTURE_TIMEZONE),
+    limit: int | None = Query(default=None, ge=1),
+):
+    return fixture_product_payload(
+        source=source,
+        status=status,
+        date_filter=fixture_date,
+        stage=stage,
+        tz=tz,
+        limit=limit,
+    )
 
 
 @app.get("/fixtures/{fixture_id}", response_model=Fixture)
