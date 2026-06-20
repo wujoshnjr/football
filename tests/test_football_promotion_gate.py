@@ -87,6 +87,26 @@ def test_promotion_gate_blocks_low_samples_and_manual_baseline() -> None:
     assert "calibration_report_insufficient_sample" in report["blockers"]
 
 
+def test_promotion_gate_accepts_ok_true_data_contract_without_blocker() -> None:
+    feature_hash = current_feature_schema_hash()
+    report = build_promotion_gate_report(
+        model_status={
+            "model_source": "trained_artifact",
+            "active_model_allowed": True,
+            "clean_train_samples": 350,
+            "production_samples": 1200,
+            "feature_schema_match": True,
+            "artifact_feature_schema_hash": feature_hash,
+        },
+        calibration_report={"sample_count": 600, "status": "ok"},
+        sample_state={},
+        data_contract_report={"ok": True, "error_count": 0},
+        output_path=None,
+    )
+
+    assert "data_contract_not_ok" not in report["blockers"]
+
+
 def test_promotion_gate_can_report_production_ready_for_valid_trained_artifact() -> None:
     feature_hash = current_feature_schema_hash()
     report = build_promotion_gate_report(
