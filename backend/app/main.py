@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +33,7 @@ FIXTURE_CACHE_PATHS = [
     ROOT_DIR / "data" / "raw" / "fixtures_latest.json",
     ROOT_DIR / "report" / "fixtures_latest.json",
 ]
+SOURCE_HEALTH_REPORT_PATH = ROOT_DIR / "report" / "source_health_report.json"
 FIXTURE_SOURCE_DESCRIPTION = "Fixture source: auto, demo, cache, or ingestion."
 
 
@@ -158,6 +160,73 @@ def fixture_ingestion():
     return FixtureIngestionService(settings).ingest()
 
 
+def load_json_file(path: Path) -> dict[str, Any] | list[Any] | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def source_health_report() -> dict[str, Any]:
+    """Read the latest source-health artifact without calling external APIs.
+
+    This keeps user-facing requests fast and avoids burning API quota on every page
+    load. CI/Render jobs should refresh report/source_health_report.json by running
+    scripts/build_source_health_report.py.
+    """
+
+    payload = load_json_file(SOURCE_HEALTH_REPORT_PATH)
+    if isinstance(payload, dict):
+        payload.setdefault("serving_mode", "cached_report")
+        payload.setdefault("report_path", str(SOURCE_HEALTH_REPORT_PATH.relative_to(ROOT_DIR)))
+        return payload
+
+    context = source_context()
+    configured = list(getattr(context, "sources_configured", []) or [])
+    missing = list(getattr(context, "sources_missing", []) or [])
+    return {
+        "report_type": "source_health",
+        "serving_mode": "report_missing",
+        "generated_at": None,
+        "source_count": len(configured) + len(missing),
+        "ok_count": 0,
+        "sources": [
+            {
+                "source_key": key,
+                "attempted": False,
+                "configured": True,
+                "enabled": True,
+                "ok": False,
+                "status": "health_report_missing",
+                "status_code": None,
+                "error": "Run scripts/build_source_health_report.py to refresh source health.",
+                "record_count": 0,
+                "retryable": True,
+            }
+            for key in configured
+        ]
+        + [
+            {
+                "source_key": key,
+                "attempted": False,
+                "configured": False,
+                "enabled": False,
+                "ok": False,
+                "status": "missing_configuration",
+                "status_code": None,
+                "error": "Source is not configured in the current environment.",
+                "record_count": 0,
+                "retryable": False,
+            }
+            for key in missing
+        ],
+        "usage_note": (
+            "This endpoint serves the last cached source-health report only. It never calls external APIs, "
+            "never triggers real-money betting, never submits picks, and never emits recommended bets or stake sizing."
+        ),
+    }
+
+
 def cached_fixture_records() -> list[dict]:
     """Read pre-generated fixture snapshots without calling external APIs.
 
@@ -167,13 +236,7 @@ def cached_fixture_records() -> list[dict]:
     """
 
     for path in FIXTURE_CACHE_PATHS:
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-
+        payload = load_json_file(path)
         if isinstance(payload, dict):
             records = payload.get("fixtures", [])
         elif isinstance(payload, list):
@@ -281,6 +344,11 @@ def data_sources() -> list[DataSourceStatus]:
 @app.get("/data-sources/context")
 def data_source_context():
     return source_context()
+
+
+@app.get("/data-sources/health")
+def data_sources_health():
+    return source_health_report()
 
 
 @app.get("/ingestion/fixtures")
