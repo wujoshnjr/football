@@ -11,8 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from app import main
+from scripts.source_registry import CANONICAL_SOURCE_KEYS
+from scripts.source_report_schema import validate_source_report
 
 client = TestClient(main.app)
 
@@ -62,6 +66,35 @@ def test_finished_fixture_prediction_uses_standard_error() -> None:
     assert_no_forbidden_betting_keys(payload)
 
 
+def test_data_sources_endpoint_uses_canonical_13_source_registry() -> None:
+    response = client.get("/data-sources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert tuple(source["key"] for source in payload) == CANONICAL_SOURCE_KEYS
+    assert len(payload) == 13
+    assert len({source["key"] for source in payload}) == 13
+    assert all("category" in source for source in payload)
+    assert all("reliability" in source for source in payload)
+    assert all("notes" in source for source in payload)
+    serialized = json.dumps(payload)
+    assert "secret-" not in serialized
+    assert "tnm_" not in serialized
+    assert_no_forbidden_betting_keys(payload)
+
+
+def test_data_sources_canonical_endpoint_does_not_expose_secret_values() -> None:
+    response = client.get("/data-sources/canonical")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert tuple(source["key"] for source in payload) == CANONICAL_SOURCE_KEYS
+    serialized = json.dumps(payload)
+    assert "secret-" not in serialized
+    assert "tnm_" not in serialized
+    assert_no_forbidden_betting_keys(payload)
+
+
 def test_ingestion_endpoint_returns_json_report_when_service_fails(monkeypatch) -> None:
     def fail_ingestion() -> dict:
         raise RuntimeError("provider URL with possible secret should not be returned")
@@ -87,8 +120,17 @@ def test_ingestion_endpoint_returns_json_report_when_service_fails(monkeypatch) 
     assert_no_forbidden_betting_keys(payload)
 
 
-def test_ingestion_endpoint_adds_source_report_alias_and_safety(monkeypatch) -> None:
-    source_report = {"source_key": "football_data", "status": "missing_credentials", "record_count": 0}
+def test_ingestion_endpoint_converts_legacy_sources_to_source_reports(monkeypatch) -> None:
+    source_report = {
+        "source_key": "football_data",
+        "attempted": True,
+        "configured": True,
+        "enabled": True,
+        "ok": False,
+        "status": "adapter_exception",
+        "error": "upstream failed",
+        "record_count": 0,
+    }
 
     monkeypatch.setattr(
         main,
@@ -105,10 +147,47 @@ def test_ingestion_endpoint_adds_source_report_alias_and_safety(monkeypatch) -> 
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["source_reports"] == [source_report]
+    assert payload["sources"] == [source_report]
+    assert len(payload["source_reports"]) == 1
+    assert payload["source_reports"][0]["source"]["key"] == "football_data"
+    assert payload["source_reports"][0]["status"] == "upstream_error"
+    assert payload["source_reports"][0]["success"] is False
+    validate_source_report(payload["source_reports"][0])
     assert payload["errors"] == []
     assert payload["warnings"] == []
     assert payload["safety"]["live_betting_allowed"] is False
+    assert_no_forbidden_betting_keys(payload)
+
+
+def test_ingestion_endpoint_validates_existing_source_reports(monkeypatch) -> None:
+    existing_report = {
+        "source": {"key": "openfootball_worldcup_json"},
+        "attempted": False,
+        "success": True,
+        "status": "ok",
+        "record_count": 0,
+        "error": None,
+        "missing_env": [],
+        "checked_at": "2026-06-20T00:00:00+00:00",
+    }
+
+    monkeypatch.setattr(
+        main,
+        "fixture_ingestion",
+        lambda: {
+            "generated_at": "2026-06-20T00:00:00+00:00",
+            "fixture_count": 0,
+            "source_reports": [existing_report],
+            "fixtures": [],
+        },
+    )
+
+    response = client.get("/ingestion/fixtures")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_reports"] == [existing_report]
+    validate_source_report(payload["source_reports"][0])
     assert_no_forbidden_betting_keys(payload)
 
 
