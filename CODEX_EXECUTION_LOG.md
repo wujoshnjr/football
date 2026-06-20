@@ -198,3 +198,25 @@ Safety status:
 - No API keys requested or committed.
 - No prediction model behavior changes.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 9: Pipeline Manifest
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:06:55+08:00 |
+| completed_at | 2026-06-20T16:16:26+08:00 |
+| phase | Phase 9: Pipeline Manifest |
+| files_changed | `scripts/football_pipeline_manifest.py`, `tests/test_football_pipeline_manifest.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_pipeline_manifest.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `a971332b74f3d9dd3112d97cdf741bfabc6f3e95`, `9f5036a274d62d562283c7e98197554b3f3e61d7`, `80eb96f558ec81bcb2e3e73d3987e5f33631f040` |
+| notes | Added football pipeline manifest for expected report/data artifacts with existence, size, sha256, updated_at, CSV row counts, and JSON top-level key summaries. Missing artifacts are recorded without crashing. Tests use temporary files only. |
+| next_phase | Phase 10: Evaluation / Calibration |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Manifest generation does not call external APIs or betting services.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
