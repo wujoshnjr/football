@@ -101,6 +101,16 @@ def normalize_model_source(value: Any) -> str:
     return text if text in MODEL_SOURCES else "manual_baseline"
 
 
+def data_contract_passed(report: Mapping[str, Any]) -> bool:
+    ok = as_bool(report.get("ok"))
+    error_count = safe_int(report.get("error_count"), default=-1)
+    if ok is True and error_count == 0:
+        return True
+
+    status = str(report.get("status") or "").strip().lower()
+    return status in {"ok", "passed"}
+
+
 def build_promotion_gate_report(
     model_status: Mapping[str, Any] | None = None,
     calibration_report: Mapping[str, Any] | None = None,
@@ -188,8 +198,7 @@ def build_promotion_gate_report(
     model_logloss = finite_or_none(calibration_report.get("model_logloss"))
     model_brier = finite_or_none(calibration_report.get("model_brier") or calibration_report.get("multiclass_brier_score"))
 
-    data_contract_status = str(data_contract_report.get("status") or "missing")
-    if data_contract_report and data_contract_status not in {"ok", "passed"}:
+    if data_contract_report and not data_contract_passed(data_contract_report):
         blockers.append("data_contract_not_ok")
     elif not data_contract_report:
         warnings.append("data_contract_report_missing")
