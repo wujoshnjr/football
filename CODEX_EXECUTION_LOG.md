@@ -68,3 +68,330 @@ Safety status:
 - No API keys requested or committed.
 - No prediction model, adapter, or endpoint behavior changes.
 - No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 3: SourceRegistry and SourceReport Schema
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:22:08+08:00 |
+| completed_at | 2026-06-20T14:39:43+08:00 |
+| phase | Phase 3: SourceRegistry and SourceReport Schema |
+| files_changed | `scripts/source_registry.py`, `scripts/source_report_schema.py`, `tests/test_source_registry.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_source_registry.py`; `python --version`; `py --version` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized; `python.exe` and `py.exe` failed to execute with a login-session error. Tests were added but not run. |
+| commit_sha | `2a35ab42cb4af3f8c8e4643b414e4841ab3d6508`, `af5cf946b575fc4c8ccf20454a230e5c15154da7`, `9b96c4d8cbb8881219574e3f200427608e13ede6`, `bbca226d2224cf7f684322c8de2e88348ce5be3c` |
+| notes | Added canonical SourceRegistry with exactly 13 approved sources, non-secret SportsDataIO and TheStatsAPI World Cup ID defaults, env-only key configuration, missing-env reporting, and Tournamental pick-submission effective lock. Added SourceReport schema and validation helpers. Updated root source registry tests to use fake env dicts only and avoid external API calls. |
+| next_phase | Phase 4: FixtureIngestionService |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model or endpoint behavior changes.
+- No external API calls made by tests or implementation.
+- No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 4: FixtureIngestionService
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:39:43+08:00 |
+| completed_at | 2026-06-20T14:51:08+08:00 |
+| phase | Phase 4: FixtureIngestionService |
+| files_changed | `scripts/fixture_ingestion_service.py`, `tests/test_fixture_ingestion_service.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_fixture_ingestion_service.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `1a807eceba2e8ae5e54c3375e82cef50c068d986`, `9c868124bec89892308f67b68c906d6e2547f75b`, `ae6dc46c5b9d9f16ed7c6a253da2aa1e25e040ab` |
+| notes | Added script-level FixtureIngestionService with adapter injection, six approved phase-one fixture sources, SourceRegistry/SourceReport integration, no-crash handling for missing env, missing adapters, timeouts, empty responses, schema mismatches, and adapter exceptions. Added report generation logic for `fixture_ingestion_report.json`, merged fixture counts, team/group counts, errors, warnings, safety flags, and fixture source provenance. Tests use fake adapters only and make no real external API calls. |
+| next_phase | Phase 5: API Endpoints |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model changes.
+- No real external API calls made by tests or implementation.
+- No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 5: API Endpoints
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:51:08+08:00 |
+| completed_at | 2026-06-20T15:17:27+08:00 |
+| phase | Phase 5: API Endpoints |
+| files_changed | `backend/app/main.py`, `tests/test_api_endpoints.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_api_endpoints.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `443a8c8f32b383f395a909577a0192b67a4fde34`, `b9f084be7e629a61a5f87a6347f2f935f802f477`, `d8a4bdeea33c5940d552b5aede84f91e027d1762` |
+| notes | Added standardized API error payloads, endpoint payload safety scanning for forbidden betting keys, locked safety flags, and a no-crash JSON fallback for `/ingestion/fixtures` if ingestion raises before producing a report. Added API endpoint contract tests using FastAPI TestClient and monkeypatched ingestion failures. No endpoint test calls real external APIs. |
+| next_phase | Phase 6: Football Feature Schema |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 6: Football Feature Schema
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:17:27+08:00 |
+| completed_at | 2026-06-20T15:33:26+08:00 |
+| phase | Phase 6: Football Feature Schema |
+| files_changed | `scripts/football_feature_schema.py`, `tests/test_football_feature_schema.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_feature_schema.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `05b11a424a75af89d508c31a77ec89f78905a774`, `9d658366a15482d45a3c135e5222c4413286d88a`, `c17ee57b6005bbba3e15dab53816741dc828b5f1` |
+| notes | Added football feature schema buckets for core model features, tracking-only features, availability flags, and shadow candidates. Added promotion guard helpers so non-core features cannot silently enter the active model. Tests cover required football feature groups, market/Tournamental tracking-only treatment, promotion approval requirements, and forbidden betting key absence. No prediction model behavior changed. |
+| next_phase | Phase 7: Snapshot Store |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No tracking-only market, weather, news, lineup, injury, xG, or Tournamental feature was promoted into the active model.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 7: Snapshot Store
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:33:26+08:00 |
+| completed_at | 2026-06-20T15:39:23+08:00 |
+| phase | Phase 7: Snapshot Store |
+| files_changed | `scripts/football_snapshot_store.py`, `tests/test_football_snapshot_store.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_snapshot_store.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `aeb971e586c97da282d36424c1cbd222a43c6f0d`, `48ab404b5cf6791a9efc0c768ee17134fc68ba1f`, `8fe55ac39dd273c4f369ab9d62c3b4983b7fce48` |
+| notes | Added football snapshot store for first-seen pregame snapshots, 1X2 probabilities, source provenance JSON, safety flags, duplicate prevention by pipeline/fixture key, post-kickoff and non-pregame rejection, and settlement-only result updates. Added tests for duplicate handling, clean pregame validation, post-kickoff skip, settlement immutability, draw result, and knockout advance result. |
+| next_phase | Phase 8: Data Contract Validator |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Settlement only writes result columns and does not mutate pregame features.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 8: Data Contract Validator
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:39:23+08:00 |
+| completed_at | 2026-06-20T16:06:55+08:00 |
+| phase | Phase 8: Data Contract Validator |
+| files_changed | `scripts/football_data_contract_validator.py`, `tests/test_football_data_contract_validator.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_data_contract_validator.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `98e22b7e0cbad79e74671ac11b05de5b30f90f96`, `a012010d02577a09ea8946811825a5f96c2ae413`, `1d58a1e58254b248e2323ed5c58139633bec7322` |
+| notes | Added football data contract validator for required report JSON files, finite JSON, required fields, SourceReport schema validation, locked safety flags, forbidden betting output keys, API-key scans for tracked files, and prediction snapshot CSV checks. Tests use temporary files only and do not touch real repo artifacts. |
+| next_phase | Phase 9: Pipeline Manifest |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 9: Pipeline Manifest
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:06:55+08:00 |
+| completed_at | 2026-06-20T16:16:26+08:00 |
+| phase | Phase 9: Pipeline Manifest |
+| files_changed | `scripts/football_pipeline_manifest.py`, `tests/test_football_pipeline_manifest.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_pipeline_manifest.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `a971332b74f3d9dd3112d97cdf741bfabc6f3e95`, `9f5036a274d62d562283c7e98197554b3f3e61d7`, `80eb96f558ec81bcb2e3e73d3987e5f33631f040` |
+| notes | Added football pipeline manifest for expected report/data artifacts with existence, size, sha256, updated_at, CSV row counts, and JSON top-level key summaries. Missing artifacts are recorded without crashing. Tests use temporary files only. |
+| next_phase | Phase 10: Evaluation / Calibration |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Manifest generation does not call external APIs or betting services.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 10: Evaluation / Calibration
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:18:20+08:00 |
+| completed_at | 2026-06-20T16:29:20+08:00 |
+| phase | Phase 10: Evaluation / Calibration |
+| files_changed | `scripts/football_calibration_report.py`, `scripts/football_model_vs_market_report.py`, `tests/test_football_evaluation.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_evaluation.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `1474ca62350a0ce49dcc2514e92961e6e66fd7e2`, `bb4b7792b82309ee08bb89ad37cabcd57ba4599e`, `d29986d2d28ab6d18a967e607035fe3e809bd8dd`, `8cbefa76d5da8d8b95fe9329b5c380bbbd21bd9a` |
+| notes | Added offline football calibration and model-vs-market report builders. Evaluation supports multiclass Brier score, multiclass LogLoss, home/draw/away calibration bins, group-stage and knockout slices, favorite-vs-underdog slices, no-vig 1X2 market consensus conversion, market movement evidence, source provenance summaries, and insufficient-sample status. Tests use static rows only and make no real external API calls. |
+| next_phase | Phase 11: Promotion Gate / Model Artifact Gate |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Market data is used only as market_consensus, external_signal, and paper_tracking evidence.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 11: Promotion Gate / Model Artifact Gate
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:29:20+08:00 |
+| completed_at | 2026-06-20T16:41:10+08:00 |
+| phase | Phase 11: Promotion Gate / Model Artifact Gate |
+| files_changed | `scripts/football_model_artifact_status.py`, `scripts/football_promotion_gate.py`, `tests/test_football_promotion_gate.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_promotion_gate.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `3239586c20851ae7a260822213f11158404238a4`, `1660e4d6d193a37e04c737bd9e36d7a319ea3956`, `45afd06c9b12656bb10f984780a503fbf69e006f`, `d650ff2e48a6e851d6add2db11a12b8822132805` |
+| notes | Added football model artifact status and promotion gate reports. Missing or unloadable model artifacts fall back to manual_baseline without crashing. Promotion gate blocks production-ready claims when clean_train_samples < 300, settled_predictions < 500, production_samples < 1000, feature_schema_hash mismatches, model_source is not eligible, data contract fails, or safety flags are true. Tests use temporary files/static dictionaries only and make no external API calls. |
+| next_phase | Phase 12: Tournamental Read-Only Adapter |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No model training or artifact loading beyond safe JSON metadata was added.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 12: Tournamental Read-Only Adapter
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:41:10+08:00 |
+| completed_at | 2026-06-20T16:49:09+08:00 |
+| phase | Phase 12: Tournamental Read-Only Adapter |
+| files_changed | `scripts/adapters/tournamental_bot_arena_adapter.py`, `tests/test_tournamental_bot_arena_adapter.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_tournamental_bot_arena_adapter.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `e800dd982e80465c8e6275f629e4f423bf0b1e18`, `519f608d9b8c61bcd4fa4f8ee113d2b95ebb7dc2`, `45d04f1fa5e0c4225364773f2632a6f9edc7aad5` |
+| notes | Added read-only Tournamental Bot Arena adapter with `get_match_catalogue`, `get_odds`, `get_injuries`, `get_weather`, and `health_check`. The adapter uses env-only configuration, supports fake HTTP clients for tests, reports missing credentials, rate limits, schema mismatches, empty responses, timeouts, and upstream errors as JSON reports, strips forbidden upstream output keys, preserves source provenance, and does not implement pick-submission methods. Tests use fake clients only and make no external API calls. |
+| next_phase | Phase 13: GitHub Actions / CI |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Tournamental pick submission remains locked false even if env requests true.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 13: GitHub Actions / CI
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:49:09+08:00 |
+| completed_at | 2026-06-20T16:58:46+08:00 |
+| phase | Phase 13: GitHub Actions / CI |
+| files_changed | `.github/workflows/ci.yml`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Workflow was added but not run locally. |
+| commit_sha | `6f222392633158a26616453ce3aecfcffcbfa4fe`, `59176210b832fff4291bea6c0229b12ba012b5ff` |
+| notes | Added safe GitHub Actions CI workflow. Workflow installs `backend/requirements.txt`, compiles `backend`, `scripts`, and `tests`, runs pytest, runs lightweight data contract checks without requiring generated reports, and builds pipeline manifest diagnostics. Workflow sets external provider env flags to disabled, locks Tournamental pick submission false, uses read-only repository permissions, and includes no deploy step. |
+| next_phase | Phase 14: README / Model Card / Data Sources / Evaluation Docs |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- Workflow does not require secrets or external provider API keys.
+- Workflow does not trigger real API high-frequency calls.
+- Workflow does not trigger betting, pick submission, or production deployment.
+
+## Phase 14: README / Model Card / Data Sources / Evaluation Docs
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:58:46+08:00 |
+| completed_at | 2026-06-20T17:19:59+08:00 |
+| phase | Phase 14: README / Model Card / Data Sources / Evaluation Docs |
+| files_changed | `README.md`, `MODEL_CARD.md`, `DATA_SOURCES.md`, `docs/EVALUATION_METHOD.md`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | Not run |
+| test_result | Documentation-only phase. No backend, adapter, endpoint, prediction model, Render env, production deploy, or real API behavior changed. |
+| commit_sha | `91b1704e69a8ccbff108704def2ef163193ded5c`, `49bc23112b9bb62d603b6c638ce7d6264d775f4c`, `c5491fb922c14f90a406cc11741c0f46248d6521`, `7a913903c8be4f4c1df51466ff6acefc2dd1032f`, `9cec5bf7c187b9333cd3670d94e56222c5d6341f` |
+| notes | Updated README and added model card, data sources reference, and evaluation methodology. Documentation now states paper-only/research-only scope, no real betting, no live betting, source roles, model limitations, sample count requirements, evaluation metrics, market consensus-only use, data quality limits, API failure behavior, and testing expectations. |
+| next_phase | Phase 15: Final Integration Check |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No code behavior changed in this phase.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 15: Final Integration Check
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T17:19:59+08:00 |
+| completed_at | 2026-06-20T17:26:44+08:00 |
+| phase | Phase 15: Final Integration Check |
+| files_changed | `docs/FOOTBALL_MLB_MIGRATION_COMPLETION_REPORT.md`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest`; `python --version`; `python -m compileall backend scripts tests` |
+| test_result | Could not execute final checks in this local workspace. `pytest` is not recognized, and `python.exe` failed to start because the login session is unavailable or terminated. Data contract and pipeline manifest checks require Python and could not be executed locally. |
+| commit_sha | `3f43ec2cd29208ff83e93fcd64378bb9509675fb`, `94dc9f25715f1c15e810a750181199301a1f4a76` |
+| notes | Added final completion report with completed phases, no pending phases, added/modified file tables, test summary, remaining risks, safety assessment, API key leak risk, production deploy risk, and next steps. Compared branch `codex/engineering-control-docs` against `main`: branch is ahead by 49 commits, behind by 1 commit, and diverged. |
+| next_phase | No pending backlog phase |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No code behavior changed in this phase.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## CI Fix: Project Validation Frontend Cache
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T17:32:00+08:00 |
+| completed_at | 2026-06-20T17:45:08+08:00 |
+| phase | CI Fix: Project Validation Frontend Cache |
+| files_changed | `.github/workflows/project-validation.yml`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | GitHub connector file checks for `frontend/package.json` and `frontend/package-lock.json`; GitHub Actions `CI`; GitHub Actions `Project Validation` |
+| test_result | `frontend/package.json` exists and `frontend/package-lock.json` is absent. Local `pytest` could not be executed because `pytest` is not recognized in this workspace. GitHub Actions passed for latest checked commit: `CI` run 27867372085 success, `Project Validation` run 27867372082 success. |
+| commit_sha | `05330d658f69129800d906cca98b1dd79935b165`, `b13c563e647f76b2badc429fc077d956c3d5ff4e` |
+| notes | Fixed Project Validation so `actions/setup-node@v4` only enables npm cache when both `frontend/package.json` and `frontend/package-lock.json` exist. The frontend job now uses uncached setup plus `npm install` when the package exists without a lockfile, and skips cleanly if the frontend package is absent. Merged main commit `44d762bb177e6548bf00dcae28774f4f18cc8201` into `codex/engineering-control-docs`; branch is now behind 0. No prediction model, adapter, safety policy, Render env, production deploy, real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes. |
+| next_phase | Wait for user confirmation before additional work |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model, adapter, or endpoint behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## PR Review Fix: Canonical Source Wiring
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T19:44:00+08:00 |
+| completed_at | 2026-06-20T20:02:18+08:00 |
+| phase | PR Review Fix: Canonical Source Wiring |
+| files_changed | `backend/app/services/source_report_compat.py`, `backend/app/main.py`, `backend/app/services/fixture_ingestion_service.py`, `scripts/football_promotion_gate.py`, `.github/workflows/project-validation.yml`, `tests/test_api_endpoints.py`, `tests/test_fixture_ingestion_service.py`, `tests/test_football_promotion_gate.py`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_api_endpoints.py tests/test_fixture_ingestion_service.py tests/test_football_promotion_gate.py`; GitHub Actions `CI`; GitHub Actions `Project Validation`; Vercel |
+| test_result | Local `pytest` could not be executed because `pytest` is not recognized in this workspace. For code commit `85a604abd709d59b3d534b3cb4a3ea7afb40e617`, GitHub Actions passed: `CI` run 27870543006 success, `Project Validation` run 27870542978 success, and Vercel success. |
+| commit_sha | `361362336367500cf8d5d8eb02cea22572182c11`, `93c84f2f383fbeeaa3ecc24968afd05d5852fc1c`, `b91a414dae63d6eddf0126258efc71e1ec2b872a`, `9a2fd6b0cb8b9c7b25c7c14471b901133923b807`, `6e73a8d1992afa2e3ebcfe813e7d84b18cd179ae`, `5de30e26fea8ba442220a625e955fe01a1bc6160`, `9ad42d9731069ef69eeaa16d8a35fa3cfe14f623`, `85a604abd709d59b3d534b3cb4a3ea7afb40e617` |
+| notes | `/data-sources` now returns the canonical 13-source registry through `DataSourceStatus`, with `/data-sources/canonical` exposing canonical metadata without API key values. Backend fixture ingestion now preserves legacy `sources` and emits schema-valid `source_reports` using `validate_source_report()` compatible fields. `safe_fixture_ingestion_report()` converts legacy-only payloads and validates existing source reports without crashing. Promotion gate now treats `{ok: true, error_count: 0}` and status `ok`/`passed` data contract reports as passing. Project Validation backend env disables external providers and keeps betting/pick-submission safety flags false. No prediction model, Render env, production deploy, real betting API, live betting, automated wagering, recommended bet, stake sizing, or Tournamental pick submission changes. |
+| next_phase | Wait for user confirmation before additional work |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changed.
+- No automatic merge to main was performed.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.

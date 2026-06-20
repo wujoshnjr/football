@@ -85,13 +85,13 @@ Acceptance criteria:
 
 ## Phase 3: SourceRegistry and SourceReport Schema
 
-Status: pending
+Status: complete
 
-Create or update:
+Created or updated:
 
-- [ ] `scripts/source_registry.py`
-- [ ] `scripts/source_report_schema.py`
-- [ ] `tests/test_source_registry.py`
+- [x] `scripts/source_registry.py`
+- [x] `scripts/source_report_schema.py`
+- [x] `tests/test_source_registry.py`
 
 Acceptance criteria:
 
@@ -106,13 +106,13 @@ Acceptance criteria:
 
 ## Phase 4: FixtureIngestionService
 
-Status: pending
+Status: complete
 
-Create or update:
+Created or updated:
 
-- [ ] `scripts/fixture_ingestion_service.py`
-- [ ] `report/fixture_ingestion_report.json` or generation logic
-- [ ] `tests/test_fixture_ingestion_service.py`
+- [x] `scripts/fixture_ingestion_service.py`
+- [x] `report/fixture_ingestion_report.json` generation logic
+- [x] `tests/test_fixture_ingestion_service.py`
 
 Phase-one fixture sources:
 
@@ -136,15 +136,15 @@ Acceptance criteria:
 
 ## Phase 5: API Endpoints
 
-Status: pending
+Status: complete
 
-Create or update FastAPI endpoints:
+Created or updated FastAPI endpoints:
 
-- [ ] `/data-sources`
-- [ ] `/data-sources/context`
-- [ ] `/ingestion/fixtures`
-- [ ] `/fixtures`
-- [ ] `/fixtures/{fixture_id}`
+- [x] `/data-sources`
+- [x] `/data-sources/context`
+- [x] `/ingestion/fixtures`
+- [x] `/fixtures`
+- [x] `/fixtures/{fixture_id}`
 
 Acceptance criteria:
 
@@ -157,12 +157,12 @@ Acceptance criteria:
 
 ## Phase 6: Football Feature Schema
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_feature_schema.py`
-- [ ] `tests/test_football_feature_schema.py`
+- [x] `scripts/football_feature_schema.py`
+- [x] `tests/test_football_feature_schema.py`
 
 Acceptance criteria:
 
@@ -175,17 +175,17 @@ Acceptance criteria:
 
 ## Phase 7: Snapshot Store
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_snapshot_store.py`
-- [ ] `tests/test_football_snapshot_store.py`
+- [x] `scripts/football_snapshot_store.py`
+- [x] `tests/test_football_snapshot_store.py`
 
 Artifacts:
 
-- `prediction_snapshots.csv`
-- `finalized_fixtures.csv`
+- `prediction_snapshots.csv` generation logic
+- `finalized_fixtures.csv` reserved artifact path
 
 Acceptance criteria:
 
@@ -200,12 +200,12 @@ Acceptance criteria:
 
 ## Phase 8: Data Contract Validator
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_data_contract_validator.py`
-- [ ] `tests/test_football_data_contract_validator.py`
+- [x] `scripts/football_data_contract_validator.py`
+- [x] `tests/test_football_data_contract_validator.py`
 
 Acceptance criteria:
 
@@ -221,14 +221,14 @@ Acceptance criteria:
 
 ## Phase 9: Pipeline Manifest
 
-Status: pending
+Status: complete
 
-Create:
+Created:
 
-- [ ] `scripts/football_pipeline_manifest.py`
-- [ ] `tests/test_football_pipeline_manifest.py`
+- [x] `scripts/football_pipeline_manifest.py`
+- [x] `tests/test_football_pipeline_manifest.py`
 
-Track artifacts:
+Tracked artifacts:
 
 - `report/prediction.json`
 - `report/fixture_ingestion_report.json`
@@ -256,13 +256,13 @@ Acceptance criteria:
 
 ## Phase 10: Evaluation / Calibration
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `scripts/football_calibration_report.py`
-- [ ] `scripts/football_model_vs_market_report.py`
-- [ ] `tests/test_football_evaluation.py`
+- [x] `scripts/football_calibration_report.py`
+- [x] `scripts/football_model_vs_market_report.py`
+- [x] `tests/test_football_evaluation.py`
 
 Acceptance criteria:
 
@@ -279,13 +279,13 @@ Acceptance criteria:
 
 ## Phase 11: Promotion Gate / Model Artifact Gate
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `scripts/football_promotion_gate.py`
-- [ ] `scripts/football_model_artifact_status.py`
-- [ ] `tests/test_football_promotion_gate.py`
+- [x] `scripts/football_promotion_gate.py`
+- [x] `scripts/football_model_artifact_status.py`
+- [x] `tests/test_football_promotion_gate.py`
 
 Acceptance criteria:
 
@@ -300,12 +300,12 @@ Acceptance criteria:
 
 ## Phase 12: Tournamental Read-Only Adapter
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `scripts/adapters/tournamental_bot_arena_adapter.py`
-- [ ] `tests/test_tournamental_bot_arena_adapter.py`
+- [x] `scripts/adapters/tournamental_bot_arena_adapter.py`
+- [x] `tests/test_tournamental_bot_arena_adapter.py`
 
 Read-only methods:
 
@@ -333,9 +333,9 @@ Acceptance criteria:
 
 ## Phase 13: GitHub Actions / CI
 
-Status: pending
+Status: complete
 
-Create or update workflow carefully.
+Created or updated workflow carefully.
 
 Acceptance criteria:
 
@@ -352,14 +352,14 @@ Acceptance criteria:
 
 ## Phase 14: README / Model Card / Data Sources / Evaluation Docs
 
-Status: pending
+Status: complete
 
 Create or update:
 
-- [ ] `README.md`
-- [ ] `MODEL_CARD.md`
-- [ ] `DATA_SOURCES.md`
-- [ ] `docs/EVALUATION_METHOD.md`
+- [x] `README.md`
+- [x] `MODEL_CARD.md`
+- [x] `DATA_SOURCES.md`
+- [x] `docs/EVALUATION_METHOD.md`
 
 Acceptance criteria:
 
@@ -377,11 +377,11 @@ Acceptance criteria:
 
 ## Phase 15: Final Integration Check
 
-Status: pending
+Status: complete
 
 Create:
 
-- [ ] `docs/FOOTBALL_MLB_MIGRATION_COMPLETION_REPORT.md`
+- [x] `docs/FOOTBALL_MLB_MIGRATION_COMPLETION_REPORT.md`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 3: SourceRegistry and SourceReport Schema.
+No pending backlog phase.

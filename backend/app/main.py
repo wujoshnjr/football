@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -6,12 +7,18 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.safety_policy import enforce_no_forbidden_output_keys
 from app.schemas import DataSourceStatus, Fixture, ManualPredictionInput, ModelPerformance, TeamSnapshot
 from app.services.advanced_feature_registry import advanced_feature_registry
 from app.services.feature_table_service import build_match_feature_table
 from app.services.fixture_ingestion_service import FixtureIngestionService, normalize_name
 from app.services.prediction_service import PredictionService
 from app.services.source_fusion_service import SourceFusionService
+from app.services.source_report_compat import (
+    canonical_data_source_statuses,
+    canonical_source_registry,
+    normalize_ingestion_report_source_reports,
+)
 from app.services.tournamental_odds_client import TournamentalOddsClient
 from app.services.tournamental_odds_normalizer import find_market_signal_for_fixture, normalize_tournamental_snapshot
 from app.services.tournamental_wc2026_client import TournamentalWC2026Client
@@ -35,6 +42,101 @@ FIXTURE_CACHE_PATHS = [
 ]
 SOURCE_HEALTH_REPORT_PATH = ROOT_DIR / "report" / "source_health_report.json"
 FIXTURE_SOURCE_DESCRIPTION = "Fixture source: auto, demo, cache, or ingestion."
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def api_error(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details or {},
+        }
+    }
+
+
+def locked_safety_flags() -> dict[str, bool]:
+    return {
+        "live_betting_allowed": False,
+        "automated_wagering_allowed": False,
+        "real_money_betting_allowed": False,
+        "pick_submission_allowed": False,
+    }
+
+
+def to_plain_payload(payload: Any) -> Any:
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump()
+    if isinstance(payload, list):
+        return [to_plain_payload(item) for item in payload]
+    if isinstance(payload, tuple):
+        return [to_plain_payload(item) for item in payload]
+    if isinstance(payload, dict):
+        return {key: to_plain_payload(value) for key, value in payload.items()}
+    return payload
+
+
+def safe_payload(payload: Any) -> Any:
+    enforce_no_forbidden_output_keys(to_plain_payload(payload))
+    return payload
+
+
+def safe_fixture_ingestion_report() -> dict[str, Any]:
+    checked_at = utc_now()
+    try:
+        payload = fixture_ingestion()
+    except Exception as exc:  # noqa: BLE001 - API returns a JSON report instead of crashing
+        payload = {
+            "generated_at": checked_at,
+            "checked_at": checked_at,
+            "fixture_count": 0,
+            "merged_fixture_count": 0,
+            "teams_count": 0,
+            "groups_count": 0,
+            "sources": [],
+            "source_reports": [],
+            "fixtures": [],
+            "errors": [
+                api_error(
+                    "fixture_ingestion_failed",
+                    "Fixture ingestion failed before a report could be completed.",
+                    {"error_type": type(exc).__name__},
+                )
+            ],
+            "warnings": [],
+            "safety": locked_safety_flags(),
+            "usage_note": "Fixture ingestion is read-only and returns report JSON even when providers fail.",
+        }
+
+    if not isinstance(payload, dict):
+        payload = {
+            "generated_at": checked_at,
+            "checked_at": checked_at,
+            "fixture_count": 0,
+            "merged_fixture_count": 0,
+            "teams_count": 0,
+            "groups_count": 0,
+            "sources": [],
+            "source_reports": [],
+            "fixtures": [],
+            "errors": [api_error("fixture_ingestion_invalid_report", "Fixture ingestion returned a non-object report.")],
+            "warnings": [],
+            "safety": locked_safety_flags(),
+        }
+
+    payload.setdefault("checked_at", payload.get("generated_at") or checked_at)
+    payload = normalize_ingestion_report_source_reports(
+        payload,
+        checked_at=payload.get("checked_at") or payload.get("generated_at") or checked_at,
+    )
+    payload.setdefault("errors", [])
+    payload.setdefault("warnings", [])
+    payload.setdefault("safety", locked_safety_flags())
+    payload.setdefault("usage_note", "Fixture ingestion is read-only and returns report JSON.")
+    return safe_payload(payload)
 
 
 def team(
@@ -309,7 +411,14 @@ def fixtures_by_source(source: str = "auto") -> list[Fixture]:
     if source == "auto":
         cached = cached_fixtures()
         return cached or demo_fixtures()
-    raise HTTPException(status_code=400, detail="source must be one of: auto, demo, cache, ingestion")
+    raise HTTPException(
+        status_code=400,
+        detail=api_error(
+            "invalid_fixture_source",
+            "source must be one of: auto, demo, cache, ingestion",
+            {"source": source},
+        ),
+    )
 
 
 def match_feature_rows(source: str = "auto"):
@@ -338,105 +447,113 @@ def health() -> dict[str, str]:
 
 @app.get("/data-sources", response_model=list[DataSourceStatus])
 def data_sources() -> list[DataSourceStatus]:
-    return SourceFusionService(settings).registry()
+    return safe_payload(canonical_data_source_statuses())
+
+
+@app.get("/data-sources/canonical")
+def data_sources_canonical():
+    return safe_payload(canonical_source_registry())
 
 
 @app.get("/data-sources/context")
 def data_source_context():
-    return source_context()
+    return safe_payload(source_context())
 
 
 @app.get("/data-sources/health")
 def data_sources_health():
-    return source_health_report()
+    return safe_payload(source_health_report())
 
 
 @app.get("/ingestion/fixtures")
 def ingestion_fixtures():
-    return fixture_ingestion()
+    return safe_fixture_ingestion_report()
 
 
 @app.get("/model/features")
 def model_features():
-    return advanced_feature_registry()
+    return safe_payload(advanced_feature_registry())
 
 
 @app.get("/model/feature-table")
 def model_feature_table(
     source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION),
 ):
-    return match_feature_rows(source=source)
+    return safe_payload(match_feature_rows(source=source))
 
 
 @app.get("/market/worldcup/health")
 def worldcup_market_health():
-    return tournamental_odds().health()
+    return safe_payload(tournamental_odds().health())
 
 
 @app.get("/market/worldcup/snapshot")
 def worldcup_market_snapshot():
-    return tournamental_odds().snapshot()
+    return safe_payload(tournamental_odds().snapshot())
 
 
 @app.get("/market/worldcup/snapshot/normalized")
 def worldcup_market_snapshot_normalized():
     normalized = normalized_market_snapshot()
     if normalized is None:
-        return tournamental_odds().snapshot()
-    return normalized
+        return safe_payload(tournamental_odds().snapshot())
+    return safe_payload(normalized)
 
 
 @app.get("/market/worldcup/markets")
 def worldcup_market_markets():
-    return tournamental_odds().markets()
+    return safe_payload(tournamental_odds().markets())
 
 
 @app.get("/market/worldcup/match/{match_no}")
 def worldcup_market_match(match_no: str):
-    return tournamental_odds().match(match_no)
+    return safe_payload(tournamental_odds().match(match_no))
 
 
 @app.get("/market/worldcup/team/{code}/winner")
 def worldcup_market_team_winner(code: str):
-    return tournamental_odds().team_winner(code)
+    return safe_payload(tournamental_odds().team_winner(code))
 
 
 @app.get("/market/worldcup/team/{code}/group")
 def worldcup_market_team_group(code: str):
-    return tournamental_odds().team_group(code)
+    return safe_payload(tournamental_odds().team_group(code))
 
 
 @app.get("/wc2026/health")
 def wc2026_health():
-    return tournamental_wc2026().health()
+    return safe_payload(tournamental_wc2026().health())
 
 
 @app.get("/wc2026/version")
 def wc2026_version():
-    return tournamental_wc2026().version()
+    return safe_payload(tournamental_wc2026().version())
 
 
 @app.get("/wc2026/upcoming")
 def wc2026_upcoming():
-    return tournamental_wc2026().upcoming()
+    return safe_payload(tournamental_wc2026().upcoming())
 
 
 @app.get("/wc2026/match/{match_id}")
 def wc2026_match(match_id: str):
-    return tournamental_wc2026().match(match_id)
+    return safe_payload(tournamental_wc2026().match(match_id))
 
 
 @app.get("/fixtures", response_model=list[Fixture])
 def list_fixtures(source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION)) -> list[Fixture]:
-    return fixtures_by_source(source)
+    return safe_payload(fixtures_by_source(source))
 
 
 @app.get("/fixtures/{fixture_id}", response_model=Fixture)
 def get_fixture(fixture_id: str, source: str = Query(default="auto", description=FIXTURE_SOURCE_DESCRIPTION)) -> Fixture:
     for fixture in fixtures_by_source(source):
         if fixture.id == fixture_id:
-            return fixture
-    raise HTTPException(status_code=404, detail="Fixture not found")
+            return safe_payload(fixture)
+    raise HTTPException(
+        status_code=404,
+        detail=api_error("fixture_not_found", "Fixture not found", {"fixture_id": fixture_id, "source": source}),
+    )
 
 
 @app.get("/predictions/{fixture_id}")
@@ -446,15 +563,23 @@ def get_prediction(
 ):
     fixture = get_fixture(fixture_id, source=source)
     if fixture.status.lower() in {"finished", "final", "full_time"}:
-        raise HTTPException(status_code=409, detail="Fixture is finished; use final score instead of prediction")
+        raise HTTPException(
+            status_code=409,
+            detail=api_error(
+                "fixture_finished",
+                "Fixture is finished; use final score instead of prediction.",
+                {"fixture_id": fixture_id},
+            ),
+        )
     market_snapshot = normalized_market_snapshot()
     market_signal = find_market_signal_for_fixture(fixture, market_snapshot) if market_snapshot else None
     service = PredictionService(model_version=settings.model_version)
-    return service.predict_fixture(
+    prediction = service.predict_fixture(
         fixture,
         source_context=source_context(),
         market_signal=market_signal,
     )
+    return safe_payload(prediction)
 
 
 @app.post("/predictions/manual")
@@ -466,15 +591,17 @@ def manual_prediction(payload: ManualPredictionInput):
         away_team=payload.away_team,
         kickoff_time=payload.kickoff_time,
     )
-    return service.predict_fixture(fixture, source_context=payload.source_context)
+    return safe_payload(service.predict_fixture(fixture, source_context=payload.source_context))
 
 
 @app.get("/model/performance", response_model=ModelPerformance)
 def model_performance() -> ModelPerformance:
-    return ModelPerformance(
-        model_version=settings.model_version,
-        matches_evaluated=0,
-        accuracy=None,
-        log_loss=None,
-        brier_score=None,
+    return safe_payload(
+        ModelPerformance(
+            model_version=settings.model_version,
+            matches_evaluated=0,
+            accuracy=None,
+            log_loss=None,
+            brier_score=None,
+        )
     )

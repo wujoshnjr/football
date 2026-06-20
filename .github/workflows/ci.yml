@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LIVE_BETTING_ALLOWED: "false"
+  AUTOMATED_WAGERING_ALLOWED: "false"
+  REAL_MONEY_BETTING_ALLOWED: "false"
+  TOURNAMENTAL_ENABLE_PICK_SUBMISSION: "false"
+  FOOTBALL_DATA_ENABLED: "false"
+  API_FOOTBALL_ENABLED: "false"
+  WORLD_CUP_2026_API_ENABLED: "false"
+  OPENFOOTBALL_WORLDCUP_JSON_ENABLED: "false"
+  SPORTSDATAIO_ENABLED: "false"
+  THESTATSAPI_ENABLED: "false"
+  TOURNAMENTAL_ENABLED: "false"
+
+jobs:
+  test:
+    name: Python checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
+
+      - name: Compile critical Python files
+        run: python -m compileall backend scripts tests
+
+      - name: Run pytest
+        env:
+          PYTHONPATH: .:backend
+        run: pytest
+
+      - name: Run lightweight data contract checks
+        env:
+          PYTHONPATH: .:backend
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.football_data_contract_validator import validate_data_contract
+
+          report = validate_data_contract(root=Path('.'), required_reports=())
+          print(json.dumps(report, indent=2, sort_keys=True))
+          if not report.get('ok', False):
+              raise SystemExit(1)
+          PY
+
+      - name: Build pipeline manifest diagnostic
+        env:
+          PYTHONPATH: .:backend
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.football_pipeline_manifest import write_pipeline_manifest
+
+          report = write_pipeline_manifest(root=Path('.'))
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
