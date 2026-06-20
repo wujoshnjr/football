@@ -68,3 +68,25 @@ Safety status:
 - No API keys requested or committed.
 - No prediction model, adapter, or endpoint behavior changes.
 - No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 3: SourceRegistry and SourceReport Schema
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:22:08+08:00 |
+| completed_at | 2026-06-20T14:39:43+08:00 |
+| phase | Phase 3: SourceRegistry and SourceReport Schema |
+| files_changed | `scripts/source_registry.py`, `scripts/source_report_schema.py`, `tests/test_source_registry.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_source_registry.py`; `python --version`; `py --version` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized; `python.exe` and `py.exe` failed to execute with a login-session error. Tests were added but not run. |
+| commit_sha | `2a35ab42cb4af3f8c8e4643b414e4841ab3d6508`, `af5cf946b575fc4c8ccf20454a230e5c15154da7`, `9b96c4d8cbb8881219574e3f200427608e13ede6`, `bbca226d2224cf7f684322c8de2e88348ce5be3c` |
+| notes | Added canonical SourceRegistry with exactly 13 approved sources, non-secret SportsDataIO and TheStatsAPI World Cup ID defaults, env-only key configuration, missing-env reporting, and Tournamental pick-submission effective lock. Added SourceReport schema and validation helpers. Updated root source registry tests to use fake env dicts only and avoid external API calls. |
+| next_phase | Phase 4: FixtureIngestionService |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model or endpoint behavior changes.
+- No external API calls made by tests or implementation.
+- No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
