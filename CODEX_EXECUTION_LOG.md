@@ -155,3 +155,25 @@ Safety status:
 - No prediction model behavior changes.
 - No tracking-only market, weather, news, lineup, injury, xG, or Tournamental feature was promoted into the active model.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 7: Snapshot Store
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:33:26+08:00 |
+| completed_at | 2026-06-20T15:39:23+08:00 |
+| phase | Phase 7: Snapshot Store |
+| files_changed | `scripts/football_snapshot_store.py`, `tests/test_football_snapshot_store.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_snapshot_store.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `aeb971e586c97da282d36424c1cbd222a43c6f0d`, `48ab404b5cf6791a9efc0c768ee17134fc68ba1f`, `8fe55ac39dd273c4f369ab9d62c3b4983b7fce48` |
+| notes | Added football snapshot store for first-seen pregame snapshots, 1X2 probabilities, source provenance JSON, safety flags, duplicate prevention by pipeline/fixture key, post-kickoff and non-pregame rejection, and settlement-only result updates. Added tests for duplicate handling, clean pregame validation, post-kickoff skip, settlement immutability, draw result, and knockout advance result. |
+| next_phase | Phase 8: Data Contract Validator |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- Settlement only writes result columns and does not mutate pregame features.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
