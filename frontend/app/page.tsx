@@ -2,34 +2,57 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const fetchCache = 'force-no-store';
 
-type TeamSnapshot = { id: string; name: string; country: string; fifa_rank?: number | null; elo_rating: number };
-type Fixture = {
+type ProductFixture = {
   id: string;
-  home_team: TeamSnapshot;
-  away_team: TeamSnapshot;
+  fixture_id: string;
+  home_team: string;
+  away_team: string;
   kickoff_time: string;
+  kickoff_time_taiwan?: string | null;
   venue?: string | null;
   stage: string;
   status: string;
   home_score?: number | null;
   away_score?: number | null;
+  winner?: string | null;
+  result?: string | null;
+  finalized_at?: string | null;
+  source_provenance?: Array<{ source_key?: string | null; role?: string | null }>;
+  source_keys?: string[];
+  last_updated_at?: string | null;
 };
+
+type DataCompleteness = {
+  fixture_count: number;
+  completed_count: number;
+  tomorrow_count: number;
+  scheduled_count: number;
+  is_complete_worldcup_schedule: boolean;
+  missing_reason?: string | null;
+  source_used: string;
+  expected_fixture_count?: number;
+  minimum_fixture_count?: number;
+};
+
+type FixturePayload = {
+  generated_at?: string | null;
+  timezone: string;
+  source_used: string;
+  fixture_count: number;
+  fixtures: ProductFixture[];
+  data_completeness: DataCompleteness;
+  warnings?: string[];
+  cache_path?: string | null;
+};
+
 type Forecast = {
   probabilities: { home_win: number; draw: number; away_win: number };
   expected_goals: { home: number; away: number };
-  most_likely_scores: Array<{ score: string; probability: number }>;
   confidence: string;
   model_version: string;
   explanation: string[];
 };
-type SourceContext = {
-  sources_used: string[];
-  sources_configured: string[];
-  sources_missing: string[];
-  reliability_score: number;
-  fixture_consensus_score: number;
-  model_adjustment_note: string;
-};
+
 type SourceHealthItem = {
   source_key: string;
   ok: boolean;
@@ -41,8 +64,8 @@ type SourceHealthItem = {
   latency_ms?: number | null;
   error?: string | null;
 };
+
 type SourceHealthReport = {
-  report_type?: string;
   serving_mode?: string;
   generated_at?: string | null;
   source_count?: number;
@@ -50,26 +73,68 @@ type SourceHealthReport = {
   sources?: SourceHealthItem[];
   usage_note?: string;
 };
+
 type FetchResult<T> = { data: T; ok: boolean; error?: string };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-const fixtureSource = 'auto';
-const fixtureSourceLabel = 'auto（cache-first）';
-const finalStates = ['finished', 'final', 'full_time'];
-const requestTimeoutMs = 5500;
-const featuredPredictionLimit = 4;
-const sourceHealthDisplayLimit = 8;
+const requestTimeoutMs = 6500;
+const predictionFetchLimit = 6;
 
-function isFinal(fixture: Fixture) { return finalStates.includes(fixture.status.toLowerCase()); }
-function matchStatus(fixture: Fixture) { return isFinal(fixture) ? '已完賽' : '未開賽'; }
-function percent(value: number) { return `${Math.round(value * 100)}%`; }
-function displayTime(value: string) {
+function emptyFixturePayload(label: string): FixturePayload {
+  return {
+    timezone: 'Asia/Taipei',
+    source_used: label,
+    fixture_count: 0,
+    fixtures: [],
+    data_completeness: {
+      fixture_count: 0,
+      completed_count: 0,
+      tomorrow_count: 0,
+      scheduled_count: 0,
+      is_complete_worldcup_schedule: false,
+      missing_reason: 'frontend_fetch_failed',
+      source_used: label,
+    },
+    warnings: [],
+    cache_path: null,
+  };
+}
+
+function isCompleted(fixture: ProductFixture) {
+  return fixture.status === 'completed' || ['finished', 'final', 'full_time'].includes(fixture.status.toLowerCase());
+}
+
+function percent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function displayTime(value?: string | null) {
+  if (!value || value === 'unknown') return '時間待定';
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value.replaceAll('-', '/');
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '時間待定';
-  return parsed.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
-function displayLatency(value?: number | null) { return typeof value === 'number' ? `${value}ms` : '未量測'; }
+
+function sourceBadges(fixture: ProductFixture) {
+  const keys = fixture.source_keys?.length
+    ? fixture.source_keys
+    : fixture.source_provenance?.map((item) => item.source_key).filter(Boolean) ?? [];
+  return Array.from(new Set(keys)).slice(0, 3);
+}
+
+function diagnosticMessage(result: FetchResult<unknown>) {
+  if (result.ok) return '連線正常';
+  if (result.error?.includes('timeout')) return 'Render 可能冷啟動，請稍後重試。';
+  return result.error ?? '後端暫時無回應';
+}
 
 async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutMs): Promise<FetchResult<T>> {
   const controller = new AbortController();
@@ -88,89 +153,157 @@ async function getJson<T>(path: string, fallback: T, timeoutMs = requestTimeoutM
   }
 }
 
-async function getForecast(fixture: Fixture): Promise<Forecast | null> {
-  if (isFinal(fixture)) return null;
-  const result = await getJson<Forecast | null>(`/predictions/${fixture.id}?source=${fixtureSource}`, null, 4500);
-  return result.data;
+async function getForecast(fixture: ProductFixture): Promise<Forecast | null> {
+  if (isCompleted(fixture)) return null;
+  const result = await getJson<Forecast | null>(`/predictions/${fixture.fixture_id}?source=auto`, null, 4200);
+  return result.ok ? result.data : null;
 }
 
-function StatusChip({ ok, label }: { ok: boolean; label: string }) {
-  return <span className={ok ? 'chip ok' : 'chip bad'}>{label}</span>;
-}
-
-function PercentBar({ label, value }: { label: string; value: number }) {
-  return <div className="percentRow"><div className="percentHeader"><span>{label}</span><strong>{percent(value)}</strong></div><div className="track"><div className="bar" style={{ width: percent(value) }} /></div></div>;
-}
-
-function MatchCard({ fixture, forecast, showPrediction = false }: { fixture: Fixture; forecast: Forecast | null; showPrediction?: boolean }) {
-  const done = isFinal(fixture);
+function CompletenessNotice({ payload }: { payload: FixturePayload }) {
+  const completeness = payload.data_completeness;
+  if (completeness.is_complete_worldcup_schedule) {
+    return <p className="notice good">資料完整度：完整世界盃賽程 cache 已載入。</p>;
+  }
   return (
-    <article className="card">
-      <div className="cardTop"><span>{fixture.stage}</span><span>{matchStatus(fixture)}</span></div>
-      <h2>{fixture.home_team.name} vs {fixture.away_team.name}</h2>
-      <p className="time">{displayTime(fixture.kickoff_time)}</p>
-      {fixture.venue ? <p className="time">{fixture.venue}</p> : null}
-      {done ? <>
-        <div className="metrics"><div><span>最終比分</span><strong>{fixture.home_score} : {fixture.away_score}</strong></div><div><span>卡片類型</span><strong>結果</strong></div></div>
-        <ul className="reasons"><li>已完賽，只顯示比分，不把賽後資料混入賽前預測。</li></ul>
-      </> : forecast ? <>
-        <div className="probabilities"><PercentBar label="主勝" value={forecast.probabilities.home_win} /><PercentBar label="和局" value={forecast.probabilities.draw} /><PercentBar label="客勝" value={forecast.probabilities.away_win} /></div>
-        <div className="metrics"><div><span>預期進球</span><strong>{forecast.expected_goals.home} : {forecast.expected_goals.away}</strong></div><div><span>信心等級</span><strong>{forecast.confidence}</strong></div></div>
-        <div className="scores">{forecast.most_likely_scores.slice(0, 3).map((item) => <span key={item.score}>{item.score} · {percent(item.probability)}</span>)}</div>
-        <ul className="reasons">{forecast.explanation.slice(0, 4).map((item) => <li key={item}>{item}</li>)}</ul>
-        <p className="version">Model: {forecast.model_version}</p>
-      </> : showPrediction ? <p className="warning">預測暫時不可用，頁面已先載入賽程。</p> : <div className="metrics"><div><span>資料狀態</span><strong>賽程已載入</strong></div><div><span>AI 分析</span><strong>熱門區顯示</strong></div></div>}
+    <div className="notice warn">
+      <strong>資料仍在同步</strong>
+      <span>目前 cache 賽事數：{completeness.fixture_count}</span>
+      <span>原因：{completeness.missing_reason ?? 'unknown'}</span>
+      <span>更新指令：python scripts/build_worldcup_fixture_cache.py</span>
+      {payload.source_used === 'demo_fallback' ? <span>Demo fallback：目前不是正式完整賽程。</span> : null}
+    </div>
+  );
+}
+
+function ForecastSummary({ forecast }: { forecast: Forecast | null }) {
+  if (!forecast) {
+    return <p className="aiSummary">AI 預測摘要：待產生，或後端模型暫時未回應。</p>;
+  }
+  return (
+    <div className="aiSummary">
+      <strong>AI 預測摘要</strong>
+      <span>主勝 {percent(forecast.probabilities.home_win)} · 和局 {percent(forecast.probabilities.draw)} · 客勝 {percent(forecast.probabilities.away_win)}</span>
+      <span>預期進球 {forecast.expected_goals.home} : {forecast.expected_goals.away} · 信心 {forecast.confidence}</span>
+    </div>
+  );
+}
+
+function FixtureCard({ fixture, forecast, compact = false }: { fixture: ProductFixture; forecast?: Forecast | null; compact?: boolean }) {
+  const completed = isCompleted(fixture);
+  const badges = sourceBadges(fixture);
+  return (
+    <article className={compact ? 'card fixtureCard compact' : 'card fixtureCard'}>
+      <div className="cardTop">
+        <span>{fixture.stage}</span>
+        <span>{completed ? '已完賽' : fixture.status === 'live' ? '進行中' : '未開賽'}</span>
+      </div>
+      <h2>{fixture.home_team} vs {fixture.away_team}</h2>
+      <p className="time">台灣時間：{displayTime(fixture.kickoff_time_taiwan ?? fixture.kickoff_time)}</p>
+      {fixture.venue ? <p className="time">球場：{fixture.venue}</p> : null}
+      {completed ? (
+        <div className="scoreLine">
+          <strong>{fixture.home_score ?? '-'} : {fixture.away_score ?? '-'}</strong>
+          <span>{fixture.result ?? 'result pending'}</span>
+        </div>
+      ) : (
+        <ForecastSummary forecast={forecast ?? null} />
+      )}
+      <div className="badgeRow">
+        {badges.length > 0 ? badges.map((badge) => <span key={badge}>{badge}</span>) : <span>{fixture.source_provenance?.length ? 'source_provenance' : 'source pending'}</span>}
+      </div>
+      {fixture.last_updated_at ? <p className="version">更新：{displayTime(fixture.last_updated_at)}</p> : null}
     </article>
   );
 }
 
+function SectionEmpty({ title, detail }: { title: string; detail: string }) {
+  return <div className="emptyState"><h2>{title}</h2><p>{detail}</p></div>;
+}
+
 export default async function HomePage() {
-  const [fixtureResult, sourceResult, sourceHealthResult] = await Promise.all([
-    getJson<Fixture[]>(`/fixtures?source=${fixtureSource}`, []),
-    getJson<SourceContext | null>('/data-sources/context', null),
+  const [scheduleResult, tomorrowResult, completedResult, sourceHealthResult] = await Promise.all([
+    getJson<FixturePayload>('/fixtures?status=all&tz=Asia/Taipei', emptyFixturePayload('schedule_fetch_failed')),
+    getJson<FixturePayload>('/fixtures/tomorrow?tz=Asia/Taipei', emptyFixturePayload('tomorrow_fetch_failed')),
+    getJson<FixturePayload>('/fixtures/completed?tz=Asia/Taipei', emptyFixturePayload('completed_fetch_failed')),
     getJson<SourceHealthReport | null>('/data-sources/health', null, 5000),
   ]);
 
-  const fixtures = fixtureResult.data;
-  const sourceContext = sourceResult.data;
+  const schedulePayload = scheduleResult.data;
+  const tomorrowPayload = tomorrowResult.data;
+  const completedPayload = completedResult.data;
   const sourceHealth = sourceHealthResult.data;
   const healthSources = sourceHealth?.sources ?? [];
   const healthOkCount = sourceHealth?.ok_count ?? healthSources.filter((source) => source.ok).length;
-  const healthIssueCount = Math.max(0, healthSources.length - healthOkCount);
-  const healthHealthy = sourceHealthResult.ok && healthSources.length > 0;
-  const finalCount = fixtures.filter(isFinal).length;
-  const upcoming = fixtures.filter((fixture) => !isFinal(fixture));
-  const featured = upcoming.slice(0, featuredPredictionLimit);
-  const forecastPairs = await Promise.all(featured.map(async (fixture) => [fixture.id, await getForecast(fixture)] as const));
+  const completeness = schedulePayload.data_completeness;
+  const tomorrowPredictionTargets = tomorrowPayload.fixtures.filter((fixture) => !isCompleted(fixture)).slice(0, predictionFetchLimit);
+  const forecastPairs = await Promise.all(tomorrowPredictionTargets.map(async (fixture) => [fixture.fixture_id, await getForecast(fixture)] as const));
   const forecastByFixture = new Map(forecastPairs);
-  const topTeams = Array.from(new Map(fixtures.flatMap((fixture) => [fixture.home_team, fixture.away_team]).map((team) => [team.id, team])).values()).sort((a, b) => b.elo_rating - a.elo_rating).slice(0, 5);
-  const backendHealthy = fixtureResult.ok && sourceResult.ok;
-  const fixtureHealthy = fixtureResult.ok && fixtures.length > 0;
+  const completedSchedule = schedulePayload.fixtures.filter(isCompleted);
+  const upcomingSchedule = schedulePayload.fixtures.filter((fixture) => !isCompleted(fixture));
 
   return (
     <main className="page">
-      <nav className="topbar"><div className="brand"><span>⚽</span> World Cup IQ</div><div className="navlinks"><a href="#diagnostics">診斷</a><a href="#schedule">賽程</a><a href="#ai">AI預測</a><a href="#sources">資料源</a><a href="#teams">球隊</a></div></nav>
-      <section className="hero">
-        <p className="eyebrow">World Cup Match Intelligence</p><h1>世界盃足球情報站</h1>
-        <p className="subtitle">Vercel 前端連接後端 API，整合世界盃賽程、比分、AI 賽前分析與資料源透明度。首頁使用 cache-first 賽程來源，避免外部資料源拖慢頁面。</p>
-        <div className="heroActions"><a href="#diagnostics">先看系統狀態</a><a href="#schedule">查看賽程</a><a href="#ai">AI 預測</a></div>
-        <div className="metrics heroMetrics"><div><span>追蹤賽事</span><strong>{fixtures.length}</strong></div><div><span>未開賽</span><strong>{upcoming.length}</strong></div><div><span>來源健康</span><strong>{healthOkCount}/{healthSources.length || 0}</strong></div></div>
+      <nav className="topbar">
+        <div className="brand"><span>WC26</span> Match Center</div>
+        <div className="navlinks"><a href="#tomorrow">明日賽事</a><a href="#completed">已完賽</a><a href="#schedule">完整賽程</a><a href="#diagnostics">Diagnostics</a></div>
+      </nav>
+
+      <section className="hero matchHero">
+        <p className="eyebrow">2026 FIFA World Cup</p>
+        <h1>2026 世界盃比賽中心</h1>
+        <p className="subtitle">明日賽程、完賽比分、完整 fixture cache 與資料來源透明度集中在同一頁。工程診斷移到頁面底部，首頁先服務使用者看球需求。</p>
+        <div className="metrics heroMetrics">
+          <div><span>總賽事數</span><strong>{completeness.fixture_count}</strong></div>
+          <div><span>已完賽</span><strong>{completeness.completed_count}</strong></div>
+          <div><span>明日賽事</span><strong>{completeness.tomorrow_count}</strong></div>
+          <div><span>資料完整度</span><strong>{completeness.is_complete_worldcup_schedule ? '完整' : '同步中'}</strong></div>
+        </div>
+        <CompletenessNotice payload={schedulePayload} />
       </section>
-      <section className="section" id="diagnostics">
-        <div className="sectionHead"><p>Diagnostics</p><h2>系統狀態與問題診斷</h2><span>{fixtureSourceLabel}</span></div>
-        <div className="diagnosticGrid">
-          <div className="panel"><p className="eyebrow">Frontend</p><h2>Vercel 前端</h2><StatusChip ok={backendHealthy} label={backendHealthy ? '已連線' : '待確認'} /><p className="time">API Base：{API_BASE_URL}</p>{!fixtureResult.ok ? <p className="warning">/fixtures 失敗：{fixtureResult.error}</p> : null}{!sourceResult.ok ? <p className="warning">/data-sources/context 失敗：{sourceResult.error}</p> : null}</div>
-          <div className="panel"><p className="eyebrow">Fixture Source</p><h2>賽程資料來源</h2><StatusChip ok={fixtureHealthy} label={fixtureHealthy ? '已載入' : '待確認'} /><p className="time">目前模式：{fixtureSourceLabel}</p><p className="time">首頁不再直接呼叫 /ingestion/fixtures；即時來源請在後端手動檢查。</p></div>
-          <div className="panel"><p className="eyebrow">Source Health</p><h2>API 健康檢查</h2><StatusChip ok={healthHealthy && healthIssueCount === 0} label={healthHealthy ? `${healthOkCount} ok / ${healthIssueCount} issue` : 'report 待產生'} /><p className="time">模式：{sourceHealth?.serving_mode ?? 'unavailable'}</p>{!sourceHealthResult.ok ? <p className="warning">/data-sources/health 失敗：{sourceHealthResult.error}</p> : null}</div>
-          <div className="panel"><p className="eyebrow">Market Provider</p><h2>市場資料 API</h2><StatusChip ok={Boolean(sourceContext?.sources_configured?.includes('tournamental_odds'))} label={sourceContext?.sources_configured?.includes('tournamental_odds') ? '已設定' : '未設定'} /><p className="time">Tournamental odds 只作市場共識訊號，不作真實下注或 live betting。</p></div>
+
+      <section className="section" id="tomorrow">
+        <div className="sectionHead"><p>Tomorrow</p><h2>明日全部比賽</h2><span>預設 Asia/Taipei，不截斷前 4 場</span></div>
+        {tomorrowPayload.fixtures.length > 0 ? (
+          <div className="spotlight matchGrid">
+            {tomorrowPayload.fixtures.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} forecast={forecastByFixture.get(fixture.fixture_id) ?? null} />)}
+          </div>
+        ) : <SectionEmpty title="明日賽程尚未載入" detail="若資料來源仍在同步，請執行 fixture cache builder；Demo fallback 不會偽裝成完整賽程。" />}
+      </section>
+
+      <section className="section" id="completed">
+        <div className="sectionHead"><p>Results</p><h2>已完賽結果</h2><span>保留比分、勝負、來源與 finalized_at</span></div>
+        {completedPayload.fixtures.length > 0 ? (
+          <div className="grid resultGrid">
+            {completedPayload.fixtures.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} compact />)}
+          </div>
+        ) : <SectionEmpty title="尚無已完賽資料" detail="目前 cache 沒有 completed fixtures；若只看到 demo fallback，頁面會明確標示資料不完整。" />}
+      </section>
+
+      <section className="section" id="schedule">
+        <div className="sectionHead"><p>Schedule</p><h2>完整賽程</h2><span>completed / upcoming 分區，依日期排序</span></div>
+        <div className="splitSchedule">
+          <div>
+            <h3>Upcoming</h3>
+            {upcomingSchedule.length > 0 ? upcomingSchedule.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} compact />) : <p className="warning">沒有 upcoming fixtures。</p>}
+          </div>
+          <div>
+            <h3>Completed</h3>
+            {completedSchedule.length > 0 ? completedSchedule.map((fixture) => <FixtureCard key={fixture.fixture_id} fixture={fixture} compact />) : <p className="warning">沒有 completed fixtures。</p>}
+          </div>
         </div>
       </section>
-      {fixtures.length === 0 ? <section className="emptyState"><h2>目前沒有賽程資料</h2><p>優先檢查 Render 後端是否部署成功、Vercel 的 NEXT_PUBLIC_API_BASE_URL 是否指向後端，以及 /fixtures?source=auto 是否有資料。</p></section> : null}
-      <section className="section" id="ai"><div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>顯示前 {featuredPredictionLimit} 場未開賽比賽，符合世界盃單日多場賽程</span></div><div className="spotlight">{featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} showPrediction />)}</div></section>
-      <section className="section" id="schedule"><div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>source={fixtureSourceLabel}，所有時間以台灣時間顯示</span></div><section className="grid">{fixtures.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} />)}</section></section>
-      <section className="dashboardRow"><div className="panel" id="sources"><p className="eyebrow">Data Sources</p><h2>資料源狀態</h2><div className="sourceMeter"><strong>{sourceContext ? Math.round(sourceContext.reliability_score * 100) : 0}%</strong><span>source reliability</span></div><p className="time">已啟用：{sourceContext?.sources_configured?.length ?? 0} 個來源</p><p className="time">待補齊：{sourceContext?.sources_missing?.length ?? 0} 個來源</p><p className="warning">{sourceContext?.model_adjustment_note ?? '尚未取得 source context。'}</p></div><div className="panel"><p className="eyebrow">Source Health Matrix</p><h2>API 即時健康報告</h2><div className="teamList">{healthSources.slice(0, sourceHealthDisplayLimit).map((source) => <div key={source.source_key}><span>{source.source_key} · {source.status} · {displayLatency(source.latency_ms)}</span><strong>{source.ok ? 'OK' : 'CHECK'}</strong></div>)}</div>{healthSources.length === 0 ? <p className="warning">尚未取得 source health report；請在 CI 或 Render 執行 build_source_health_report。</p> : null}</div><div className="panel" id="teams"><p className="eyebrow">Teams</p><h2>球隊戰力焦點</h2><div className="teamList">{topTeams.map((team) => <div key={team.id}><span>{team.name}</span><strong>{Math.round(team.elo_rating)}</strong></div>)}</div></div></section>
-      <section className="articleStrip"><article><p>目前狀態</p><h3>Vercel 前端使用 cache-first 後端賽程，降低外部 API timeout 對首頁的影響。</h3></article><article><p>資料策略</p><h3>source=auto 優先讀取本地快取，沒有快取才退回 demo；source health 由後端快取報告提供。</h3></article><article><p>下一步</p><h3>建立 prediction ledger、feature schema 與 backtest report，讓每次預測可驗證、可回測。</h3></article></section>
-      <footer className="footer">World Cup IQ — AI predictions are informational analysis only.</footer>
+
+      <section className="section diagnosticsSection" id="diagnostics">
+        <div className="sectionHead"><p>Diagnostics</p><h2>Runtime Diagnostics</h2><span>工程狀態保留在底部</span></div>
+        <div className="diagnosticGrid">
+          <div className="panel"><p className="eyebrow">Backend</p><h2>Fixture API</h2><span className={scheduleResult.ok ? 'chip ok' : 'chip bad'}>{diagnosticMessage(scheduleResult)}</span><p className="time">API Base：{API_BASE_URL}</p></div>
+          <div className="panel"><p className="eyebrow">Completeness</p><h2>Fixture Cache</h2><span className={completeness.is_complete_worldcup_schedule ? 'chip ok' : 'chip bad'}>{completeness.is_complete_worldcup_schedule ? '完整' : '同步中'}</span><p className="time">source：{schedulePayload.source_used}</p><p className="time">cache：{schedulePayload.cache_path ?? 'not available'}</p></div>
+          <div className="panel"><p className="eyebrow">Source Health</p><h2>Providers</h2><span className={sourceHealthResult.ok ? 'chip ok' : 'chip bad'}>{diagnosticMessage(sourceHealthResult)}</span><p className="time">健康來源：{healthOkCount}/{healthSources.length || 0}</p></div>
+        </div>
+        {healthSources.length > 0 ? <div className="sourceList">{healthSources.slice(0, 8).map((source) => <div key={source.source_key}><span>{source.source_key} · {source.status}</span><strong>{source.ok ? 'OK' : 'CHECK'}</strong></div>)}</div> : null}
+      </section>
+
+      <footer className="footer">World Cup Match Center — AI predictions are informational analysis only. No live betting, no wagering, no stake sizing.</footer>
     </main>
   );
 }
