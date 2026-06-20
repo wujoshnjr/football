@@ -106,13 +106,13 @@ Acceptance criteria:
 
 ## Phase 4: FixtureIngestionService
 
-Status: pending
+Status: complete
 
-Create or update:
+Created or updated:
 
-- [ ] `scripts/fixture_ingestion_service.py`
-- [ ] `report/fixture_ingestion_report.json` or generation logic
-- [ ] `tests/test_fixture_ingestion_service.py`
+- [x] `scripts/fixture_ingestion_service.py`
+- [x] `report/fixture_ingestion_report.json` generation logic
+- [x] `tests/test_fixture_ingestion_service.py`
 
 Phase-one fixture sources:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 4: FixtureIngestionService.
+Phase 5: API Endpoints.
