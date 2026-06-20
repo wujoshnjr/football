@@ -177,3 +177,24 @@ Safety status:
 - No prediction model behavior changes.
 - Settlement only writes result columns and does not mutate pregame features.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 8: Data Contract Validator
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:39:23+08:00 |
+| completed_at | 2026-06-20T16:06:55+08:00 |
+| phase | Phase 8: Data Contract Validator |
+| files_changed | `scripts/football_data_contract_validator.py`, `tests/test_football_data_contract_validator.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_data_contract_validator.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `98e22b7e0cbad79e74671ac11b05de5b30f90f96`, `a012010d02577a09ea8946811825a5f96c2ae413`, `1d58a1e58254b248e2323ed5c58139633bec7322` |
+| notes | Added football data contract validator for required report JSON files, finite JSON, required fields, SourceReport schema validation, locked safety flags, forbidden betting output keys, API-key scans for tracked files, and prediction snapshot CSV checks. Tests use temporary files only and do not touch real repo artifacts. |
+| next_phase | Phase 9: Pipeline Manifest |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
