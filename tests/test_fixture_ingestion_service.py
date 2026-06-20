@@ -162,7 +162,7 @@ def test_sportsdataio_requires_world_cup_ids_when_enabled() -> None:
         sportsdataio_world_cup_season=None,
     )
     result = FixtureIngestionService(settings).sportsdataio_worldcup()
-    assert result.error == "missing_world_cup_ids"
+    assert result.status == "missing_world_cup_ids"
     assert result.record_count == 0
 
 
@@ -171,7 +171,7 @@ def test_feature_sources_report_readiness_not_fixture_records() -> None:
     result = FixtureIngestionService(settings).fifa_ranking_source()
     assert result.source_key == "fifa_ranking_source"
     assert result.ok is True
-    assert result.error == "feature_source_not_fixture_ingestion"
+    assert result.status == "ranking_snapshot_source_not_fixture_ingestion"
     assert result.records == []
 
 
@@ -187,7 +187,7 @@ def test_tournamental_bot_arena_missing_credentials_does_not_crash() -> None:
     result = FixtureIngestionService(settings).tournamental_bot_arena()
     assert result.source_key == "tournamental_bot_arena"
     assert result.ok is False
-    assert result.error == "missing_credentials"
+    assert result.status == "missing_credentials"
     assert result.records == []
 
 
@@ -203,9 +203,9 @@ def test_tournamental_bot_arena_is_read_only_and_not_fixture_ingestion() -> None
     result = FixtureIngestionService(settings).tournamental_bot_arena()
     assert result.source_key == "tournamental_bot_arena"
     assert result.ok is True
-    assert result.error == "read_only_benchmark_not_fixture_ingestion"
-    assert result.record_count == 0
-    assert result.records == []
+    assert result.status == "read_only_benchmark_not_fixture_ingestion"
+    assert result.record_count == 1
+    assert result.records[0]["safety_note"] == "adapter does not submit picks or trigger live betting"
 
 
 def test_dedupe_prefers_espn_over_openfootball_for_same_fixture() -> None:
