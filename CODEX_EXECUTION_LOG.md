@@ -133,3 +133,25 @@ Safety status:
 - No API keys requested or committed.
 - No prediction model behavior changes.
 - No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 6: Football Feature Schema
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T15:17:27+08:00 |
+| completed_at | 2026-06-20T15:33:26+08:00 |
+| phase | Phase 6: Football Feature Schema |
+| files_changed | `scripts/football_feature_schema.py`, `tests/test_football_feature_schema.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_football_feature_schema.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `05b11a424a75af89d508c31a77ec89f78905a774`, `9d658366a15482d45a3c135e5222c4413286d88a`, `c17ee57b6005bbba3e15dab53816741dc828b5f1` |
+| notes | Added football feature schema buckets for core model features, tracking-only features, availability flags, and shadow candidates. Added promotion guard helpers so non-core features cannot silently enter the active model. Tests cover required football feature groups, market/Tournamental tracking-only treatment, promotion approval requirements, and forbidden betting key absence. No prediction model behavior changed. |
+| next_phase | Phase 7: Snapshot Store |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model behavior changes.
+- No tracking-only market, weather, news, lineup, injury, xG, or Tournamental feature was promoted into the active model.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
