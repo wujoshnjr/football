@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,34 @@ def locked_safety_flags() -> dict[str, bool]:
         "automated_wagering_allowed": False,
         "real_money_betting_allowed": False,
         "pick_submission_allowed": False,
+    }
+
+
+def runtime_env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    return "unknown"
+
+
+def runtime_environment() -> str:
+    if isinstance(settings.app_env, str) and settings.app_env.strip():
+        return settings.app_env.strip()
+    return "unknown"
+
+
+def runtime_version_report() -> dict[str, Any]:
+    return {
+        "app": settings.app_name,
+        "environment": runtime_environment(),
+        "git_commit": runtime_env_value("GIT_COMMIT", "RENDER_GIT_COMMIT", "VERCEL_GIT_COMMIT_SHA"),
+        "branch": runtime_env_value("GIT_BRANCH", "RENDER_GIT_BRANCH"),
+        "deployed_at": runtime_env_value("DEPLOYED_AT"),
+        "live_betting_allowed": False,
+        "automated_wagering_allowed": False,
+        "real_money_betting_allowed": False,
+        "tournamental_pick_submission_allowed": False,
     }
 
 
@@ -443,6 +472,11 @@ def normalized_market_snapshot() -> dict | None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "model_version": settings.model_version}
+
+
+@app.get("/runtime/version")
+def runtime_version() -> dict[str, Any]:
+    return safe_payload(runtime_version_report())
 
 
 @app.get("/data-sources", response_model=list[DataSourceStatus])
