@@ -90,3 +90,25 @@ Safety status:
 - No prediction model or endpoint behavior changes.
 - No external API calls made by tests or implementation.
 - No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
+
+## Phase 4: FixtureIngestionService
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T14:39:43+08:00 |
+| completed_at | 2026-06-20T14:51:08+08:00 |
+| phase | Phase 4: FixtureIngestionService |
+| files_changed | `scripts/fixture_ingestion_service.py`, `tests/test_fixture_ingestion_service.py`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | `pytest tests/test_fixture_ingestion_service.py` |
+| test_result | Could not execute tests in this local workspace. `pytest` is not recognized. Tests were added but not run. |
+| commit_sha | `1a807eceba2e8ae5e54c3375e82cef50c068d986`, `9c868124bec89892308f67b68c906d6e2547f75b`, `ae6dc46c5b9d9f16ed7c6a253da2aa1e25e040ab` |
+| notes | Added script-level FixtureIngestionService with adapter injection, six approved phase-one fixture sources, SourceRegistry/SourceReport integration, no-crash handling for missing env, missing adapters, timeouts, empty responses, schema mismatches, and adapter exceptions. Added report generation logic for `fixture_ingestion_report.json`, merged fixture counts, team/group counts, errors, warnings, safety flags, and fixture source provenance. Tests use fake adapters only and make no real external API calls. |
+| next_phase | Phase 5: API Endpoints |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No prediction model changes.
+- No real external API calls made by tests or implementation.
+- No live betting, automated wagering, real betting API, stake sizing, betting recommendation, or pick submission changes.
