@@ -33,6 +33,9 @@ jobs:
       - name: Generate source report
         run: python scripts/ingest_open_sources.py
 
+      - name: Generate source health report
+        run: python scripts/build_source_health_report.py
+
       - name: Sync fixture cache
         run: python scripts/sync_fixture_cache.py
 
@@ -45,6 +48,7 @@ jobs:
           name: football-validation-artifacts
           path: |
             report/data_sources_report.json
+            report/source_health_report.json
             report/fixture_cache_report.json
             report/feature_table_report.json
             data/raw/source_registry_snapshot.json
