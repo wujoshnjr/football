@@ -85,13 +85,13 @@ Acceptance criteria:
 
 ## Phase 3: SourceRegistry and SourceReport Schema
 
-Status: pending
+Status: complete
 
-Create or update:
+Created or updated:
 
-- [ ] `scripts/source_registry.py`
-- [ ] `scripts/source_report_schema.py`
-- [ ] `tests/test_source_registry.py`
+- [x] `scripts/source_registry.py`
+- [x] `scripts/source_report_schema.py`
+- [x] `tests/test_source_registry.py`
 
 Acceptance criteria:
 
@@ -399,4 +399,4 @@ Acceptance criteria:
 
 ## Current Next Phase
 
-Phase 3: SourceRegistry and SourceReport Schema.
+Phase 4: FixtureIngestionService.
