@@ -127,6 +127,18 @@ Set the frontend API base URL with:
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
+## Runtime Smoke Check
+
+Deployment setup and endpoint expectations are documented in [docs/RUNTIME_DEPLOYMENT_CHECKLIST.md](docs/RUNTIME_DEPLOYMENT_CHECKLIST.md).
+
+Run the smoke check from the repository root after the backend has a public runtime URL:
+
+```bash
+FOOTBALL_BACKEND_URL=https://<backend-runtime-host> python scripts/runtime_smoke_check.py
+```
+
+The script checks `/health`, `/data-sources`, `/data-sources/canonical`, `/ingestion/fixtures`, and `/fixtures`. Missing `FOOTBALL_BACKEND_URL` or endpoint failures produce a JSON report instead of crashing. The check is read-only and does not call real betting APIs, submit picks, output recommended bets, or output stake sizing.
+
 ## Tests
 
 ```bash
@@ -140,6 +152,7 @@ pytest tests/test_source_registry.py
 pytest tests/test_fixture_ingestion_service.py
 pytest tests/test_football_evaluation.py
 pytest tests/test_tournamental_bot_arena_adapter.py
+pytest tests/test_runtime_smoke_check.py
 ```
 
 External API tests must use mocks, fake clients, monkeypatching, or recorded safe fixtures. CI disables external providers by default and does not require API keys.
