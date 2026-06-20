@@ -37,6 +37,7 @@ const fixtureSource = 'auto';
 const fixtureSourceLabel = 'auto（cache-first）';
 const finalStates = ['finished', 'final', 'full_time'];
 const requestTimeoutMs = 5500;
+const featuredPredictionLimit = 4;
 
 function isFinal(fixture: Fixture) { return finalStates.includes(fixture.status.toLowerCase()); }
 function matchStatus(fixture: Fixture) { return isFinal(fixture) ? '已完賽' : '未開賽'; }
@@ -111,7 +112,7 @@ export default async function HomePage() {
   const sourceContext = sourceResult.data;
   const finalCount = fixtures.filter(isFinal).length;
   const upcoming = fixtures.filter((fixture) => !isFinal(fixture));
-  const featured = upcoming.slice(0, 2);
+  const featured = upcoming.slice(0, featuredPredictionLimit);
   const forecastPairs = await Promise.all(featured.map(async (fixture) => [fixture.id, await getForecast(fixture)] as const));
   const forecastByFixture = new Map(forecastPairs);
   const topTeams = Array.from(new Map(fixtures.flatMap((fixture) => [fixture.home_team, fixture.away_team]).map((team) => [team.id, team])).values()).sort((a, b) => b.elo_rating - a.elo_rating).slice(0, 5);
@@ -136,7 +137,7 @@ export default async function HomePage() {
         </div>
       </section>
       {fixtures.length === 0 ? <section className="emptyState"><h2>目前沒有賽程資料</h2><p>優先檢查 Render 後端是否部署成功、Vercel 的 NEXT_PUBLIC_API_BASE_URL 是否指向後端，以及 /fixtures?source=auto 是否有資料。</p></section> : null}
-      <section className="section" id="ai"><div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>只抓前 2 場，避免 Vercel render 與後端冷啟動卡住首頁</span></div><div className="spotlight">{featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} showPrediction />)}</div></section>
+      <section className="section" id="ai"><div className="sectionHead"><p>AI Prediction</p><h2>熱門 AI 賽前分析</h2><span>顯示前 {featuredPredictionLimit} 場未開賽比賽，符合世界盃單日多場賽程</span></div><div className="spotlight">{featured.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} showPrediction />)}</div></section>
       <section className="section" id="schedule"><div className="sectionHead"><p>Schedule</p><h2>完整賽程與比分</h2><span>source={fixtureSourceLabel}，所有時間以台灣時間顯示</span></div><section className="grid">{fixtures.map((fixture) => <MatchCard key={fixture.id} fixture={fixture} forecast={forecastByFixture.get(fixture.id) ?? null} />)}</section></section>
       <section className="dashboardRow"><div className="panel" id="sources"><p className="eyebrow">Data Sources</p><h2>資料源狀態</h2><div className="sourceMeter"><strong>{sourceContext ? Math.round(sourceContext.reliability_score * 100) : 0}%</strong><span>source reliability</span></div><p className="time">已啟用：{sourceContext?.sources_configured?.length ?? 0} 個來源</p><p className="time">待補齊：{sourceContext?.sources_missing?.length ?? 0} 個來源</p><p className="warning">{sourceContext?.model_adjustment_note ?? '尚未取得 source context。'}</p></div><div className="panel" id="teams"><p className="eyebrow">Teams</p><h2>球隊戰力焦點</h2><div className="teamList">{topTeams.map((team) => <div key={team.id}><span>{team.name}</span><strong>{Math.round(team.elo_rating)}</strong></div>)}</div></div></section>
       <section className="articleStrip"><article><p>目前狀態</p><h3>Vercel 前端使用 cache-first 後端賽程，降低外部 API timeout 對首頁的影響。</h3></article><article><p>資料策略</p><h3>source=auto 優先讀取本地快取，沒有快取才退回 demo；source=ingestion 保留給後端檢查。</h3></article><article><p>下一步</p><h3>新增可排程的 fixture cache 產生流程，讓前端讀到穩定快照。</h3></article></section>
