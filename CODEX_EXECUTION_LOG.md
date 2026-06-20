@@ -308,3 +308,24 @@ Safety status:
 - Workflow does not require secrets or external provider API keys.
 - Workflow does not trigger real API high-frequency calls.
 - Workflow does not trigger betting, pick submission, or production deployment.
+
+## Phase 14: README / Model Card / Data Sources / Evaluation Docs
+
+| Field | Value |
+| --- | --- |
+| started_at | 2026-06-20T16:58:46+08:00 |
+| completed_at | 2026-06-20T17:19:59+08:00 |
+| phase | Phase 14: README / Model Card / Data Sources / Evaluation Docs |
+| files_changed | `README.md`, `MODEL_CARD.md`, `DATA_SOURCES.md`, `docs/EVALUATION_METHOD.md`, `CODEX_BACKLOG.md`, `CODEX_EXECUTION_LOG.md` |
+| tests_run | Not run |
+| test_result | Documentation-only phase. No backend, adapter, endpoint, prediction model, Render env, production deploy, or real API behavior changed. |
+| commit_sha | `91b1704e69a8ccbff108704def2ef163193ded5c`, `49bc23112b9bb62d603b6c638ce7d6264d775f4c`, `c5491fb922c14f90a406cc11741c0f46248d6521`, `7a913903c8be4f4c1df51466ff6acefc2dd1032f`, `9cec5bf7c187b9333cd3670d94e56222c5d6341f` |
+| notes | Updated README and added model card, data sources reference, and evaluation methodology. Documentation now states paper-only/research-only scope, no real betting, no live betting, source roles, model limitations, sample count requirements, evaluation metrics, market consensus-only use, data quality limits, API failure behavior, and testing expectations. |
+| next_phase | Phase 15: Final Integration Check |
+
+Safety status:
+
+- No production deploy or Render env changes.
+- No API keys requested or committed.
+- No code behavior changed in this phase.
+- No real betting API, live betting, automated wagering, stake sizing, betting recommendation, or pick submission changes.
