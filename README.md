@@ -45,6 +45,66 @@ The project now includes controlled engineering layers for:
 - read-only Tournamental benchmark adapter
 - safe GitHub Actions CI
 
+## 2026 World Cup Match Center
+
+The frontend homepage is the public-facing 2026 World Cup match center. It prioritizes user match information before engineering diagnostics:
+
+- Hero summary with total fixture count, completed count, tomorrow count, and data completeness.
+- One primary fixture request to `GET /fixtures?status=all&tz=Asia/Taipei`, then client-side grouping into tomorrow, completed, and upcoming sections.
+- Tomorrow matches derived from the schedule payload, showing all matches for the next Taiwan calendar day returned by the backend.
+- Completed results derived from the schedule payload, including scores, result, finalized timestamp, and source provenance.
+- Full schedule from the same `GET /fixtures` payload, split into upcoming and completed sections.
+- Runtime diagnostics at the bottom of the page, with cold-start messaging when Render appears slow.
+
+`GET /fixtures/tomorrow` and `GET /fixtures/completed` remain available as product API endpoints, but the homepage does not depend on extra fixture fetches during cold starts.
+
+If fixture data is incomplete, the homepage must show that state clearly. Demo fallback is labeled as demo fallback and is never presented as a complete official World Cup schedule.
+
+## Fixture Cache
+
+Build the World Cup fixture cache from configured canonical fixture providers:
+
+```bash
+python scripts/build_worldcup_fixture_cache.py
+```
+
+The script writes:
+
+- `data/cache/fixtures_latest.json`
+- `report/worldcup_fixture_cache_report.json`
+
+Production deployments that should show real World Cup data must run the cache builder before deploy, or otherwise ensure `data/cache/fixtures_latest.json` is present in the backend runtime filesystem. Without that cache, `GET /fixtures?source=auto` may return explicit `demo_fallback` data with `cache_exists=false`; this is a visible fallback state, not official production schedule data.
+
+Verify runtime cache status with:
+
+```bash
+curl http://localhost:8000/fixtures/cache/status
+```
+
+The cache status endpoint reports `cache_exists`, fixture counts, completeness, missing reason, cache path, generated timestamp, and source used. It must not expose API keys.
+
+The cache builder is no-crash by design. Missing keys, provider failures, rate limits, 5xx responses, empty responses, and schema mismatches are recorded in JSON reports. A single provider failure must not crash the cache build.
+
+Completeness rules:
+
+- `is_complete_worldcup_schedule` is true only when the cache reaches the expected 2026 World Cup schedule count.
+- Fixture counts below 48 are marked as materially incomplete.
+- Fixture counts below the expected full schedule are marked incomplete with `missing_reason`.
+- Completed matches preserve scores, result, finalized timestamp, and source provenance.
+- Demo fallback is marked `demo_fallback_in_use` and never overwrites completed cache data.
+
+Fixture API examples:
+
+```bash
+curl http://localhost:8000/fixtures
+curl "http://localhost:8000/fixtures?status=completed&tz=Asia/Taipei"
+curl http://localhost:8000/fixtures/cache/status
+curl http://localhost:8000/fixtures/completed
+curl http://localhost:8000/fixtures/tomorrow
+curl http://localhost:8000/fixtures/today
+curl http://localhost:8000/fixtures/date/2026-06-21
+```
+
 ## Data Sources
 
 Canonical sources are documented in [DATA_SOURCES.md](DATA_SOURCES.md). The approved source keys are:
@@ -83,11 +143,13 @@ Expected report/data artifacts include:
 
 - `report/fixture_ingestion_report.json`
 - `report/source_health_report.json`
+- `report/worldcup_fixture_cache_report.json`
 - `report/calibration_report.json`
 - `report/model_vs_market_report.json`
 - `report/promotion_gate_report.json`
 - `report/data_contract_report.json`
 - `report/pipeline_manifest.json`
+- `data/cache/fixtures_latest.json`
 - `data/prediction_snapshots.csv`
 - `data/finalized_fixtures.csv`
 
@@ -110,6 +172,9 @@ curl http://localhost:8000/health
 curl http://localhost:8000/data-sources
 curl http://localhost:8000/data-sources/context
 curl http://localhost:8000/fixtures
+curl http://localhost:8000/fixtures/cache/status
+curl http://localhost:8000/fixtures/completed
+curl http://localhost:8000/fixtures/tomorrow
 curl http://localhost:8000/ingestion/fixtures
 ```
 
@@ -150,6 +215,8 @@ Focused examples:
 ```bash
 pytest tests/test_source_registry.py
 pytest tests/test_fixture_ingestion_service.py
+pytest tests/test_fixture_product_endpoints.py
+pytest tests/test_frontend_match_center.py
 pytest tests/test_football_evaluation.py
 pytest tests/test_tournamental_bot_arena_adapter.py
 pytest tests/test_runtime_smoke_check.py
